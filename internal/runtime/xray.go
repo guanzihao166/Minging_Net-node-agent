@@ -326,17 +326,18 @@ func (r *XrayRuntime) startCore(nodes []runtimeNode, desired agentprotocol.Desir
 	if err := core.Start(serverConfig); err != nil {
 		return nil, err
 	}
+	grouped, err := panelUsersByInbound(desired, users)
+	if err != nil {
+		_ = core.Close()
+		return nil, err
+	}
 	for _, node := range nodes {
 		if err := core.AddNode(node.tag, node.info); err != nil {
 			_ = core.Close()
 			return nil, err
 		}
-		core.LimiterManager.Add(node.tag, nil, map[int]int{}, node.info.Type)
-	}
-	grouped, err := panelUsersByInbound(desired, users)
-	if err != nil {
-		_ = core.Close()
-		return nil, err
+		inboundID, _ := strconv.ParseInt(strings.TrimPrefix(node.tag, "inbound-"), 10, 64)
+		core.LimiterManager.Add(node.tag, grouped[inboundID], map[int]int{}, node.info.Type)
 	}
 	for _, node := range nodes {
 		inboundID, _ := strconv.ParseInt(strings.TrimPrefix(node.tag, "inbound-"), 10, 64)

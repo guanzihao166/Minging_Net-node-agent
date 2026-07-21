@@ -94,6 +94,20 @@ func TestStartsAllRequiredXrayProtocolsAndAppliesUsers(t *testing.T) {
 	if err := runtime.ApplyUsers(context.Background(), users); err != nil {
 		t.Fatalf("ApplyUsers: %v", err)
 	}
+	desired.Version++
+	desired.Inbounds[1].Transport.Path = "/trojan-v2"
+	if err := runtime.ApplyConfig(context.Background(), desired); err != nil {
+		t.Fatalf("hot ApplyConfig: %v", err)
+	}
+	for _, inbound := range desired.Inbounds {
+		limiter, err := runtime.active.LimiterManager.Get(inboundTag(inbound.ID))
+		if err != nil {
+			t.Fatalf("hot config limiter %d: %v", inbound.ID, err)
+		}
+		if len(limiter.UUIDtoUID) != 1 {
+			t.Fatalf("hot config limiter %d lost users: %#v", inbound.ID, limiter.UUIDtoUID)
+		}
+	}
 	if status := runtime.Status(context.Background()); !status.Running || status.Version == "" {
 		t.Fatalf("status = %#v", status)
 	}
