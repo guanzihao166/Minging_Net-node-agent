@@ -59,7 +59,7 @@ jobs:
         run: |
           cp scripts/install.sh dist/install.sh
           cp packaging/systemd/iepl-agent.service dist/iepl-agent.service
-          scripts/generate-sbom.sh "${GITHUB_REF_NAME}" dist/sbom.cdx.json
+          sh scripts/generate-sbom.sh "${GITHUB_REF_NAME}" dist/sbom.cdx.json
       - name: Checksums
         run: cd dist && sha256sum iepl-agent-linux-* install.sh iepl-agent.service sbom.cdx.json > checksums.txt
       - name: Attest release assets
