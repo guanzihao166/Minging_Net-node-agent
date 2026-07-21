@@ -43,6 +43,13 @@ func TestBuildsAllRequiredXrayProtocolFamilies(t *testing.T) {
 			t.Fatalf("build %s: %v", node.tag, err)
 		}
 	}
+	serverKey := nodes[2].info.Protocol.ServerKey
+	if _, err := inboundbuilder.Build(nodes[2].info, nodes[2].tag); err != nil {
+		t.Fatalf("build SS2022 twice: %v", err)
+	}
+	if nodes[2].info.Protocol.ServerKey != serverKey {
+		t.Fatal("SS2022 builder mutated the raw server key")
+	}
 	if nodes[0].info.Protocol.Security != "reality" || nodes[0].info.Protocol.RealityPrivateKey == "" {
 		t.Fatalf("VLESS REALITY mapping = %#v", nodes[0].info.Protocol)
 	}
