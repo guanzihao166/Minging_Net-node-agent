@@ -22,19 +22,22 @@ go test ./...
 go build ./cmd/iepl-agent
 ```
 
-Production installation is performed by the signed release installer in
+Production installation is performed by the checksummed release installer in
 `scripts/install.sh`; runtime state belongs under `/var/lib/iepl-agent` and
-identity material under `/etc/iepl-agent`.
+identity material under `/etc/iepl-agent`. GitHub Actions attaches build
+provenance to the release assets and publishes a CycloneDX SBOM.
 
 Private GitHub release installation:
 
 ```sh
 export IEPL_AGENT_GITHUB_TOKEN='a short-lived token with read access'
-sh install.sh --version v0.1.1 \
+sh install.sh --version v0.1.4 \
   --enroll-url https://test-vpn-agent-ss.mtmt.top/api/v1/agent/enroll \
   --token-file /root/iepl-agent-enroll-token
 unset IEPL_AGENT_GITHUB_TOKEN
 ```
 
 The enrollment token file must have mode `0600`. Neither token is installed in
-the service environment or written to Agent logs.
+the service environment or written to Agent logs. Upgrades preserve the prior
+binary and systemd unit and restore them automatically when enrollment,
+service reload, restart, or the post-restart health check fails.

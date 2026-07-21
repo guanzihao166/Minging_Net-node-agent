@@ -76,7 +76,42 @@ fi
 install -d -o root -g root -m 0755 /opt/iepl-agent/bin
 install -d -o iepl-agent -g iepl-agent -m 0700 /etc/iepl-agent /var/lib/iepl-agent
 install -o root -g root -m 0755 "$tmp/$asset" /opt/iepl-agent/bin/iepl-agent.new
-/opt/iepl-agent/bin/iepl-agent.new version >/dev/null
+reported_version=$(/opt/iepl-agent/bin/iepl-agent.new version)
+[ "$reported_version" = "$version" ] || {
+  echo "release binary version mismatch: expected $version, got $reported_version" >&2
+  exit 1
+}
+
+had_binary=0
+had_unit=0
+if [ -f /opt/iepl-agent/bin/iepl-agent ]; then
+  install -o root -g root -m 0755 /opt/iepl-agent/bin/iepl-agent /opt/iepl-agent/bin/iepl-agent.previous
+  had_binary=1
+fi
+if [ -f /etc/systemd/system/iepl-agent.service ]; then
+  install -o root -g root -m 0644 /etc/systemd/system/iepl-agent.service /etc/systemd/system/iepl-agent.service.previous
+  had_unit=1
+fi
+
+rollback_install() {
+  echo "Agent installation failed; restoring the previous release." >&2
+  if [ "$had_binary" -eq 1 ]; then
+    mv -f /opt/iepl-agent/bin/iepl-agent.previous /opt/iepl-agent/bin/iepl-agent
+  else
+    rm -f /opt/iepl-agent/bin/iepl-agent
+  fi
+  if [ "$had_unit" -eq 1 ]; then
+    mv -f /etc/systemd/system/iepl-agent.service.previous /etc/systemd/system/iepl-agent.service
+  else
+    rm -f /etc/systemd/system/iepl-agent.service
+  fi
+  systemctl daemon-reload || true
+  if [ "$had_binary" -eq 1 ] && [ -f /etc/iepl-agent/identity.json ]; then
+    systemctl restart iepl-agent.service || true
+  fi
+  exit 1
+}
+
 mv -f /opt/iepl-agent/bin/iepl-agent.new /opt/iepl-agent/bin/iepl-agent
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -85,20 +120,34 @@ if [ -f "$script_dir/../packaging/systemd/iepl-agent.service" ]; then
 else
   install -o root -g root -m 0644 "$tmp/iepl-agent.service" /etc/systemd/system/iepl-agent.service
 fi
-systemctl daemon-reload
+systemctl daemon-reload || rollback_install
 
 if [ -n "$enroll_url" ] || [ -n "$token_file" ]; then
   [ -n "$enroll_url" ] && [ -n "$token_file" ] || usage
   [ -f "$token_file" ] || { echo "enrollment token file does not exist" >&2; exit 1; }
   mode="$(stat -c '%a' "$token_file")"
   [ "$mode" = "600" ] || { echo "enrollment token file must have mode 600" >&2; exit 1; }
-  /opt/iepl-agent/bin/iepl-agent enroll --url "$enroll_url" --token-file "$token_file"
+  /opt/iepl-agent/bin/iepl-agent enroll --url "$enroll_url" --token-file "$token_file" || rollback_install
   chown -R iepl-agent:iepl-agent /etc/iepl-agent /var/lib/iepl-agent
 fi
 
-systemctl enable iepl-agent.service
+systemctl enable iepl-agent.service || rollback_install
 if [ -f /etc/iepl-agent/identity.json ]; then
-  systemctl restart iepl-agent.service
+  systemctl restart iepl-agent.service || rollback_install
+  healthy=0
+  attempts=0
+  while [ "$attempts" -lt 10 ]; do
+    attempts=$((attempts + 1))
+    if systemctl is-active --quiet iepl-agent.service &&
+      [ "$(/opt/iepl-agent/bin/iepl-agent version)" = "$version" ]; then
+      healthy=1
+      break
+    fi
+    sleep 1
+  done
+  [ "$healthy" -eq 1 ] || rollback_install
 else
   echo "Agent installed but not started: enrollment identity is absent."
 fi
+
+echo "Agent $version installed successfully."
