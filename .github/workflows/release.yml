@@ -8,7 +8,6 @@ on:
 permissions:
   contents: write
   id-token: write
-  attestations: write
 
 jobs:
   test:
@@ -21,7 +20,7 @@ jobs:
           cache: true
       - run: go test ./...
       - run: go vet ./...
-      - run: sh -n scripts/install.sh scripts/generate-sbom.sh
+      - run: sh -n scripts/install.sh scripts/generate-sbom.sh scripts/generate-provenance.sh
 
   build:
     needs: test
@@ -55,17 +54,19 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: sigstore/cosign-installer@v3
       - name: Stage packaging
         run: |
           cp scripts/install.sh dist/install.sh
           cp packaging/systemd/iepl-agent.service dist/iepl-agent.service
           sh scripts/generate-sbom.sh "${GITHUB_REF_NAME}" dist/sbom.cdx.json
+          sh scripts/generate-provenance.sh dist/provenance.intoto.json \
+            dist/iepl-agent-linux-amd64 dist/iepl-agent-linux-arm64 \
+            dist/install.sh dist/iepl-agent.service dist/sbom.cdx.json
       - name: Checksums
-        run: cd dist && sha256sum iepl-agent-linux-* install.sh iepl-agent.service sbom.cdx.json > checksums.txt
-      - name: Attest release assets
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: dist/*
+        run: cd dist && sha256sum iepl-agent-linux-* install.sh iepl-agent.service sbom.cdx.json provenance.intoto.json > checksums.txt
+      - name: Sign release manifest
+        run: cosign sign-blob --yes --bundle dist/checksums.sigstore.json dist/checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

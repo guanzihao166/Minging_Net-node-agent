@@ -24,14 +24,15 @@ go build ./cmd/iepl-agent
 
 Production installation is performed by the checksummed release installer in
 `scripts/install.sh`; runtime state belongs under `/var/lib/iepl-agent` and
-identity material under `/etc/iepl-agent`. GitHub Actions attaches build
-provenance to the release assets and publishes a CycloneDX SBOM.
+identity material under `/etc/iepl-agent`. GitHub Actions publishes a
+CycloneDX SBOM, in-toto/SLSA provenance, and a keyless Sigstore bundle that
+signs the release checksum manifest.
 
 Private GitHub release installation:
 
 ```sh
 export IEPL_AGENT_GITHUB_TOKEN='a short-lived token with read access'
-sh install.sh --version v0.1.5 \
+sh install.sh --version v0.1.6 \
   --enroll-url https://test-vpn-agent-ss.mtmt.top/api/v1/agent/enroll \
   --token-file /root/iepl-agent-enroll-token
 unset IEPL_AGENT_GITHUB_TOKEN
