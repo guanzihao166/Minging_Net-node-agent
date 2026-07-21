@@ -30,7 +30,7 @@ Private GitHub release installation:
 
 ```sh
 export IEPL_AGENT_GITHUB_TOKEN='a short-lived token with read access'
-sh install.sh --version v0.1.0 \
+sh install.sh --version v0.1.1 \
   --enroll-url https://test-vpn-agent-ss.mtmt.top/api/v1/agent/enroll \
   --token-file /root/iepl-agent-enroll-token
 unset IEPL_AGENT_GITHUB_TOKEN

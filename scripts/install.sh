@@ -31,17 +31,41 @@ case "$(uname -m)" in
 esac
 
 asset="iepl-agent-linux-${arch}"
-base="https://github.com/${repo}/releases/download/${version}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 auth="Authorization: Bearer ${IEPL_AGENT_GITHUB_TOKEN}"
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-  -H "$auth" -H "Accept: application/octet-stream" -o "$tmp/$asset" "$base/$asset"
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-  -H "$auth" -H "Accept: application/octet-stream" -o "$tmp/checksums.txt" "$base/checksums.txt"
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-  -H "$auth" -H "Accept: application/octet-stream" -o "$tmp/iepl-agent.service" "$base/iepl-agent.service"
+command -v python3 >/dev/null 2>&1 || { echo "python3 is required to resolve private release assets" >&2; exit 1; }
+curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+  -H "$auth" -H "Accept: application/vnd.github+json" \
+  -o "$tmp/release.json" "https://api.github.com/repos/${repo}/releases/tags/${version}"
+
+asset_api_url() {
+  python3 - "$tmp/release.json" "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    release = json.load(handle)
+for asset in release.get("assets", []):
+    if asset.get("name") == sys.argv[2]:
+        print(asset["url"])
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+download_asset() {
+  name=$1
+  destination=$2
+  api_url=$(asset_api_url "$name") || { echo "release asset not found: $name" >&2; exit 1; }
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+    -H "$auth" -H "Accept: application/octet-stream" -o "$destination" "$api_url"
+}
+
+download_asset "$asset" "$tmp/$asset"
+download_asset checksums.txt "$tmp/checksums.txt"
+download_asset iepl-agent.service "$tmp/iepl-agent.service"
 
 (cd "$tmp" && awk -v asset="$asset" '$2 == asset || $2 == "iepl-agent.service" { print }' checksums.txt | sha256sum -c -)
 unset auth IEPL_AGENT_GITHUB_TOKEN
