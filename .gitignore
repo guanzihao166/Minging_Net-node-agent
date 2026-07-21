@@ -1,0 +1,9 @@
+/dist/
+/build/
+*.db
+*.db-shm
+*.db-wal
+*.key
+*.crt
+*.pem
+.env

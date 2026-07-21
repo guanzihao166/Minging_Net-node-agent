@@ -1,0 +1,43 @@
+[Unit]
+Description=IEPL Private Node Agent
+Documentation=https://github.com/guanzihao166/iepl-node-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iepl-agent
+Group=iepl-agent
+ExecStart=/opt/iepl-agent/bin/iepl-agent run
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3s
+TimeoutStopSec=30s
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+ReadWritePaths=/etc/iepl-agent /var/lib/iepl-agent /run/iepl-agent
+RuntimeDirectory=iepl-agent
+RuntimeDirectoryMode=0700
+StateDirectory=iepl-agent
+StateDirectoryMode=0700
+ConfigurationDirectory=iepl-agent
+ConfigurationDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

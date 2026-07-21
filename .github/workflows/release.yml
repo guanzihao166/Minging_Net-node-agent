@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+          cache: true
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: go build -buildvcs=false -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "iepl-agent-linux-${GOARCH}" ./cmd/iepl-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iepl-agent-linux-${{ matrix.arch }}
+          path: iepl-agent-linux-${{ matrix.arch }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Stage packaging
+        run: |
+          cp scripts/install.sh dist/install.sh
+          cp packaging/systemd/iepl-agent.service dist/iepl-agent.service
+      - name: Checksums
+        run: cd dist && sha256sum iepl-agent-linux-* install.sh iepl-agent.service > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
