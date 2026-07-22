@@ -220,13 +220,17 @@ func (s *Store) SaveDesiredConfig(ctx context.Context, signed agentprotocol.Sign
 		return false, err
 	}
 	defer tx.Rollback()
-	var existingHash string
-	err = tx.QueryRowContext(ctx, `SELECT sha256 FROM config_revisions WHERE version = ?`, signed.Config.Version).Scan(&existingHash)
+	var existingHash, existingStatus string
+	err = tx.QueryRowContext(ctx, `SELECT sha256, status FROM config_revisions WHERE version = ?`, signed.Config.Version).
+		Scan(&existingHash, &existingStatus)
 	if err == nil {
 		if existingHash != signed.SHA256 {
 			return false, errors.New("config version conflicts with existing hash")
 		}
-		return false, tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+		return existingStatus != "applied", nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return false, err

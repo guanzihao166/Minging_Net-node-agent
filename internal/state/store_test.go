@@ -34,6 +34,10 @@ func TestConfigRevisionPersistsBeforeAppliedState(t *testing.T) {
 	if err != nil || !inserted {
 		t.Fatalf("SaveDesiredConfig = %v, %v", inserted, err)
 	}
+	inserted, err = store.SaveDesiredConfig(ctx, signed)
+	if err != nil || !inserted {
+		t.Fatalf("received SaveDesiredConfig retry = %v, %v", inserted, err)
+	}
 	if err := store.MarkConfigApplied(ctx, 1, signed.SHA256); err != nil {
 		t.Fatal(err)
 	}

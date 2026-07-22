@@ -108,6 +108,19 @@ func TestStartsAllRequiredXrayProtocolsAndAppliesUsers(t *testing.T) {
 			t.Fatalf("hot config limiter %d lost users: %#v", inbound.ID, limiter.UUIDtoUID)
 		}
 	}
+	desired.Version++
+	desired.Inbounds = desired.Inbounds[1:]
+	if err := runtime.ApplyConfig(context.Background(), desired); err != nil {
+		t.Fatalf("ApplyConfig removing an inbound with stale users: %v", err)
+	}
+	if len(runtime.users) != len(users)-1 {
+		t.Fatalf("users after inbound removal = %#v", runtime.users)
+	}
+	for _, user := range runtime.users {
+		if user.InboundID == 31 {
+			t.Fatalf("removed inbound user was retained: %#v", user)
+		}
+	}
 	if status := runtime.Status(context.Background()); !status.Running || status.Version == "" {
 		t.Fatalf("status = %#v", status)
 	}

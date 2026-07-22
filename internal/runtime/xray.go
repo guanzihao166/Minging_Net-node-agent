@@ -56,13 +56,14 @@ func (r *XrayRuntime) ApplyConfig(_ context.Context, desired agentprotocol.Desir
 	defer r.mu.Unlock()
 	previousConfig := r.config
 	previousUsers := append([]agentprotocol.UserCredential(nil), r.users...)
+	candidateUsers := usersAvailableInConfig(desired, r.users)
 	if r.active != nil {
 		if err := r.active.Close(); err != nil {
 			return err
 		}
 		r.active = nil
 	}
-	candidate, err := r.startCore(nodes, desired, r.users)
+	candidate, err := r.startCore(nodes, desired, candidateUsers)
 	if err != nil {
 		if previousConfig != nil {
 			if previousNodes, buildErr := r.buildNodes(*previousConfig); buildErr == nil {
@@ -74,7 +75,24 @@ func (r *XrayRuntime) ApplyConfig(_ context.Context, desired agentprotocol.Desir
 	r.active = candidate
 	copyDesired := desired
 	r.config = &copyDesired
+	r.users = candidateUsers
 	return nil
+}
+
+func usersAvailableInConfig(desired agentprotocol.DesiredConfig, users []agentprotocol.UserCredential) []agentprotocol.UserCredential {
+	available := make(map[int64]struct{}, len(desired.Inbounds))
+	for _, inbound := range desired.Inbounds {
+		if inbound.Enabled {
+			available[inbound.ID] = struct{}{}
+		}
+	}
+	filtered := make([]agentprotocol.UserCredential, 0, len(users))
+	for _, user := range users {
+		if _, ok := available[user.InboundID]; ok {
+			filtered = append(filtered, user)
+		}
+	}
+	return filtered
 }
 
 func (r *XrayRuntime) ApplyUsers(_ context.Context, users []agentprotocol.UserCredential) error {
