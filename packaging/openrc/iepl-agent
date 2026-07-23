@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+
+name="iepl-agent"
+description="IEPL Private Node Agent"
+command="/opt/iepl-agent/bin/iepl-agent"
+command_args="run"
+command_user="iepl-agent:iepl-agent"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/iepl-agent/current.log"
+error_log="/var/log/iepl-agent/error.log"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath -d -o iepl-agent -g iepl-agent -m 0700 /run/iepl-agent
+	checkpath -d -o iepl-agent -g iepl-agent -m 0700 /var/log/iepl-agent
+}

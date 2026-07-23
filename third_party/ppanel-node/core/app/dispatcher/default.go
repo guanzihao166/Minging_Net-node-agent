@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juju/ratelimit"
 	"github.com/perfect-panel/ppanel-node/common/counter"
 	"github.com/perfect-panel/ppanel-node/common/rate"
 	"github.com/perfect-panel/ppanel-node/limiter"
@@ -181,7 +182,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			return nil, nil, nil, errors.New("get limiter ", sessionInbound.Tag, " error: ", err)
 		}
 		// Speed Limit and Device Limit
-		w, reject := limit.CheckLimit(user.Email,
+		_, reject := limit.CheckLimit(user.Email,
 			sessionInbound.Source.Address.IP().String(),
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
@@ -205,13 +206,18 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			writer:  uplinkWriter,
 			manager: lm,
 		}
-		lm.AddLink(managedWriter, outboundLink.Reader)
+		lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Source.Address.IP().String())
 		inboundLink.Writer = managedWriter
-		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
-			inboundLink.Writer = rate.NewRateLimitWriter(inboundLink.Writer, w)
-			outboundLink.Writer = rate.NewRateLimitWriter(outboundLink.Writer, w)
+		sessionInbound.CanSpliceCopy = 3
+		resolveBucket := func() *ratelimit.Bucket {
+			current, err := d.LimiterManager.Get(sessionInbound.Tag)
+			if err != nil {
+				return nil
+			}
+			return current.SpeedBucket(user.Email)
 		}
+		inboundLink.Writer = rate.NewDynamicRateLimitWriter(inboundLink.Writer, resolveBucket)
+		outboundLink.Writer = rate.NewDynamicRateLimitWriter(outboundLink.Writer, resolveBucket)
 		var t *counter.TrafficCounter
 		if c, ok := d.Counter.Load(sessionInbound.Tag); !ok {
 			t = counter.NewTrafficCounter()
@@ -364,7 +370,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			return errors.New("get limiter ", sessionInbound.Tag, " error: ", err)
 		}
 		// Speed Limit and Device Limit
-		w, reject := limit.CheckLimit(user.Email,
+		_, reject := limit.CheckLimit(user.Email,
 			sessionInbound.Source.Address.IP().String(),
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
@@ -386,11 +392,17 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			writer:  outbound.Writer,
 			manager: lm,
 		}
+		lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Source.Address.IP().String())
 		outbound.Writer = managedWriter
-		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
-			outbound.Writer = rate.NewRateLimitWriter(outbound.Writer, w)
+		sessionInbound.CanSpliceCopy = 3
+		resolveBucket := func() *ratelimit.Bucket {
+			current, err := d.LimiterManager.Get(sessionInbound.Tag)
+			if err != nil {
+				return nil
+			}
+			return current.SpeedBucket(user.Email)
 		}
+		outbound.Writer = rate.NewDynamicRateLimitWriter(outbound.Writer, resolveBucket)
 		var t *counter.TrafficCounter
 		if c, ok := d.Counter.Load(sessionInbound.Tag); !ok {
 			t = counter.NewTrafficCounter()

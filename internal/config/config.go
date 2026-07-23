@@ -35,8 +35,8 @@ func Parse(args []string, version string) (Config, error) {
 	set.StringVar(&cfg.RuntimeDir, "runtime-dir", "/run/iepl-agent/secrets", "ephemeral runtime secret directory")
 	set.StringVar(&cfg.EnrollmentURL, "url", "", "HTTPS enrollment endpoint")
 	set.StringVar(&cfg.EnrollmentTokenFile, "token-file", "", "one-time enrollment token file")
-	set.DurationVar(&cfg.HeartbeatInterval, "heartbeat", 15*time.Second, "heartbeat interval")
-	set.DurationVar(&cfg.TrafficInterval, "traffic-interval", 60*time.Second, "traffic WAL interval")
+	set.DurationVar(&cfg.HeartbeatInterval, "heartbeat", 5*time.Second, "heartbeat and online snapshot interval")
+	set.DurationVar(&cfg.TrafficInterval, "traffic-interval", time.Second, "traffic WAL interval")
 	set.DurationVar(&cfg.ReconnectMin, "reconnect-min", time.Second, "minimum reconnect delay")
 	set.DurationVar(&cfg.ReconnectMax, "reconnect-max", time.Minute, "maximum reconnect delay")
 	set.Int64Var(&cfg.MaxFrameBytes, "max-frame-bytes", 1024*1024, "maximum WSS frame size")
@@ -52,7 +52,7 @@ func Parse(args []string, version string) (Config, error) {
 	if cfg.Command == "enroll" && (strings.TrimSpace(cfg.EnrollmentURL) == "" || strings.TrimSpace(cfg.EnrollmentTokenFile) == "") {
 		return cfg, errors.New("enroll requires --url and --token-file")
 	}
-	if cfg.HeartbeatInterval < 5*time.Second || cfg.TrafficInterval < 10*time.Second ||
+	if cfg.HeartbeatInterval < 5*time.Second || cfg.TrafficInterval < time.Second ||
 		cfg.ReconnectMin <= 0 || cfg.ReconnectMax < cfg.ReconnectMin || cfg.MaxFrameBytes < 64*1024 || cfg.MaxFrameBytes > 8*1024*1024 {
 		return cfg, errors.New("runtime timing or frame limits are invalid")
 	}

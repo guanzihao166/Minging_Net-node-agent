@@ -239,24 +239,27 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				sendSessionError(errCh, err)
 				return
 			}
-			online, err := c.runtime.CollectOnline(ctx)
-			if err != nil {
-				sendSessionError(errCh, err)
-				return
-			}
-			if err := writer.send(agentprotocol.TypeOnlineSnapshot, agentprotocol.OnlineSnapshot{
-				CapturedAt: c.now().UTC(), Users: online,
-			}); err != nil {
-				sendSessionError(errCh, err)
-				return
-			}
 		case <-trafficTicker.C:
 			if err := c.collectAndSendTraffic(ctx, writer); err != nil {
 				sendSessionError(errCh, err)
 				return
 			}
+			if err := c.collectAndSendOnline(ctx, writer); err != nil {
+				sendSessionError(errCh, err)
+				return
+			}
 		}
 	}
+}
+
+func (c *Client) collectAndSendOnline(ctx context.Context, writer *sessionWriter) error {
+	online, err := c.runtime.CollectOnline(ctx)
+	if err != nil {
+		return err
+	}
+	return writer.send(agentprotocol.TypeOnlineSnapshot, agentprotocol.OnlineSnapshot{
+		CapturedAt: c.now().UTC(), Users: online,
+	})
 }
 
 func (c *Client) applyDesiredConfig(ctx context.Context, writer *sessionWriter, envelope agentprotocol.Envelope, secretVersions map[uint64]struct{}) error {

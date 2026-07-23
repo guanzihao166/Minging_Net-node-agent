@@ -191,16 +191,9 @@ func (r *XrayRuntime) CollectOnline(_ context.Context) ([]agentprotocol.OnlineUs
 		if !inbound.Enabled {
 			continue
 		}
-		limiter, err := r.active.LimiterManager.Get(inboundTag(inbound.ID))
-		if err != nil {
-			continue
-		}
-		online, err := limiter.GetOnlineDevice()
-		if err != nil {
-			return nil, err
-		}
+		online := r.active.GetOnlineDevices(inboundTag(inbound.ID))
 		grouped := make(map[int64][]string)
-		for _, item := range *online {
+		for _, item := range online {
 			grouped[int64(item.UID)] = append(grouped[int64(item.UID)], item.IP)
 		}
 		for subscriberID, addresses := range grouped {

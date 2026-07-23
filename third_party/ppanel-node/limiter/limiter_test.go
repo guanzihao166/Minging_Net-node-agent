@@ -104,3 +104,36 @@ func TestLimiter_rejects_at_capacity_only_when_transport_requires_tracking(t *te
 		})
 	}
 }
+
+func TestManagerSpeedBucketFollowsReplacedUserPolicy(t *testing.T) {
+	manager := NewManager()
+	taguuid := format.UserTag(testTag, testUUID)
+	manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
+	current, err := manager.Get(testTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 2_500_000 {
+		t.Fatalf("20 Mbps bucket = %#v", bucket)
+	}
+
+	manager.Delete(testTag)
+	manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 1}}, map[int]int{}, "vless")
+	current, err = manager.Get(testTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 125_000 {
+		t.Fatalf("1 Mbps bucket = %#v", bucket)
+	}
+
+	manager.Delete(testTag)
+	manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID}}, map[int]int{}, "vless")
+	current, err = manager.Get(testTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bucket := current.SpeedBucket(taguuid); bucket != nil {
+		t.Fatalf("unlimited bucket = %#v", bucket)
+	}
+}

@@ -28,17 +28,24 @@ identity material under `/etc/iepl-agent`. GitHub Actions publishes a
 CycloneDX SBOM, in-toto/SLSA provenance, and a keyless Sigstore bundle that
 signs the release checksum manifest.
 
-Private GitHub release installation:
+Public GitHub release installation:
 
 ```sh
-export IEPL_AGENT_GITHUB_TOKEN='a short-lived token with read access'
-sh install.sh --version v0.1.7 \
+sh install.sh --version v0.1.10 \
   --enroll-url https://test-vpn-agent-ss.mtmt.top/api/v1/agent/enroll \
-  --token-file /root/iepl-agent-enroll-token
-unset IEPL_AGENT_GITHUB_TOKEN
+  --enroll-token '<one-time-token>'
 ```
 
-The enrollment token file must have mode `0600`. Neither token is installed in
-the service environment or written to Agent logs. Upgrades preserve the prior
-binary and systemd unit and restore them automatically when enrollment,
-service reload, restart, or the post-restart health check fails.
+The repository and release assets are public, so no GitHub token or Python
+runtime is required. The installer accepts `curl` or BusyBox `wget`, verifies
+the release checksum, creates the least-privilege `iepl-agent` user, and
+automatically selects systemd or Alpine OpenRC. The one-time enrollment token
+is kept only in the installer temporary directory and is not written to the
+service environment or Agent logs. For an existing protected token file, use
+`--token-file`; it must have mode `0600`.
+
+On Alpine, the installer creates an OpenRC service and enables it with
+`rc-update add iepl-agent default`. On systemd hosts it installs and enables
+`iepl-agent.service` as before. Upgrades preserve the prior binary and service
+unit and restore them automatically when enrollment, service reload, restart,
+or the post-restart health check fails.

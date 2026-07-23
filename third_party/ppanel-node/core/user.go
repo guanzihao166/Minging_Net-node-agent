@@ -106,6 +106,44 @@ func (vc *XrayCore) GetUserTrafficSlice(tag string, mintraffic int) ([]panel.Use
 	return nil, nil
 }
 
+func (vc *XrayCore) GetOnlineDevices(tag string) []panel.OnlineUser {
+	if vc == nil || vc.dispatcher == nil || vc.users == nil {
+		return nil
+	}
+	prefix := tag + "|"
+	grouped := make(map[int]map[string]struct{})
+	vc.users.mapLock.RLock()
+	defer vc.users.mapLock.RUnlock()
+	vc.dispatcher.LinkManagers.Range(func(key, value interface{}) bool {
+		email, ok := key.(string)
+		if !ok || !strings.HasPrefix(email, prefix) {
+			return true
+		}
+		uid, ok := vc.users.uidMap[email]
+		if !ok {
+			return true
+		}
+		manager, ok := value.(*dispatcher.LinkManager)
+		if !ok {
+			return true
+		}
+		if grouped[uid] == nil {
+			grouped[uid] = make(map[string]struct{})
+		}
+		for _, address := range manager.ActiveIPs() {
+			grouped[uid][address] = struct{}{}
+		}
+		return true
+	})
+	devices := make([]panel.OnlineUser, 0)
+	for uid, addresses := range grouped {
+		for address := range addresses {
+			devices = append(devices, panel.OnlineUser{UID: uid, IP: address})
+		}
+	}
+	return devices
+}
+
 func (v *XrayCore) AddUsers(p *AddUsersParams) (added int, err error) {
 	v.users.mapLock.Lock()
 	defer v.users.mapLock.Unlock()

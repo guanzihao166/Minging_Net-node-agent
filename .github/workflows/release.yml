@@ -20,7 +20,7 @@ jobs:
           cache: true
       - run: go test ./...
       - run: go vet ./...
-      - run: sh -n scripts/install.sh scripts/generate-sbom.sh scripts/generate-provenance.sh
+      - run: sh -n scripts/install.sh packaging/openrc/iepl-agent scripts/generate-sbom.sh scripts/generate-provenance.sh
 
   build:
     needs: test
@@ -59,12 +59,13 @@ jobs:
         run: |
           cp scripts/install.sh dist/install.sh
           cp packaging/systemd/iepl-agent.service dist/iepl-agent.service
+          cp packaging/openrc/iepl-agent dist/iepl-agent.openrc
           sh scripts/generate-sbom.sh "${GITHUB_REF_NAME}" dist/sbom.cdx.json
           sh scripts/generate-provenance.sh dist/provenance.intoto.json \
             dist/iepl-agent-linux-amd64 dist/iepl-agent-linux-arm64 \
-            dist/install.sh dist/iepl-agent.service dist/sbom.cdx.json
+            dist/install.sh dist/iepl-agent.service dist/iepl-agent.openrc dist/sbom.cdx.json
       - name: Checksums
-        run: cd dist && sha256sum iepl-agent-linux-* install.sh iepl-agent.service sbom.cdx.json provenance.intoto.json > checksums.txt
+        run: cd dist && sha256sum iepl-agent-linux-* install.sh iepl-agent.service iepl-agent.openrc sbom.cdx.json provenance.intoto.json > checksums.txt
       - name: Sign release manifest
         run: cosign sign-blob --yes --bundle dist/checksums.sigstore.json dist/checksums.txt
       - uses: softprops/action-gh-release@v2

@@ -171,18 +171,50 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPSource bool) (Bucke
 		}
 	}
 
-	limit := int64(determineSpeedLimit(nodeLimit, userLimit)) * 1000000 / 8 // If you need the Speed limit
-	if limit > 0 {
-		Bucket = ratelimit.NewBucketWithQuantum(time.Second, limit, limit) // Byte/s
-		if v, ok := l.SpeedLimiter.LoadOrStore(taguuid, Bucket); ok {
-			return v.(*ratelimit.Bucket), false
+	return l.SpeedBucketWithLimits(taguuid, nodeLimit, userLimit), false
+}
+
+// SpeedBucketWithLimits returns a shared bucket for the current policy. It
+// replaces a stale bucket when the effective byte rate changes, allowing
+// existing dynamic writers to observe a new limit immediately.
+func (l *Limiter) SpeedBucketWithLimits(taguuid string, nodeLimit, userLimit int) *ratelimit.Bucket {
+	limit := int64(determineSpeedLimit(nodeLimit, userLimit)) * 1000000 / 8
+	if limit <= 0 {
+		l.SpeedLimiter.Delete(taguuid)
+		return nil
+	}
+	if value, ok := l.SpeedLimiter.Load(taguuid); ok {
+		if bucket, valid := value.(*ratelimit.Bucket); valid && bucket.Capacity() == limit {
+			return bucket
+		}
+	}
+	bucket := ratelimit.NewBucketWithQuantum(time.Second, limit, limit)
+	l.SpeedLimiter.Store(taguuid, bucket)
+	return bucket
+}
+
+// SpeedBucket resolves a user's current node and user policy without applying
+// connection admission checks. It is used by writers that outlive a snapshot.
+func (l *Limiter) SpeedBucket(taguuid string) *ratelimit.Bucket {
+	nodeLimit := l.SpeedLimit
+	userLimit := 0
+	if value, ok := l.UserLimitInfo.Load(taguuid); ok {
+		user := value.(*UserLimitInfo)
+		if user.ExpireTime < time.Now().Unix() && user.ExpireTime != 0 {
+			if user.SpeedLimit != 0 {
+				userLimit = user.SpeedLimit
+				user.DynamicSpeedLimit = 0
+				user.ExpireTime = 0
+			} else {
+				l.UserLimitInfo.Delete(taguuid)
+			}
 		} else {
-			l.SpeedLimiter.Store(taguuid, Bucket)
-			return Bucket, false
+			userLimit = determineSpeedLimit(user.SpeedLimit, user.DynamicSpeedLimit)
 		}
 	} else {
-		return nil, false
+		return nil
 	}
+	return l.SpeedBucketWithLimits(taguuid, nodeLimit, userLimit)
 }
 
 func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
