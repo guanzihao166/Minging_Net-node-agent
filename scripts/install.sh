@@ -25,14 +25,23 @@ done
 
 [ "$(id -u)" -eq 0 ] || { echo "installer must run as root" >&2; exit 1; }
 [ -n "$version" ] || usage
-[ -n "$enroll_url" ] || usage
-[ -n "$token_file" ] || [ -n "$enroll_token" ] || usage
 [ -z "$token_file" ] || [ -z "$enroll_token" ] || { echo "use either --token-file or --enroll-token, not both" >&2; exit 1; }
 
-case "$enroll_url" in
-  https://*) ;;
-  *) echo "enrollment URL must use https://" >&2; exit 1 ;;
-esac
+has_identity=0
+[ -f /etc/iepl-agent/identity.json ] && has_identity=1
+if [ "$has_identity" -eq 0 ]; then
+  [ -n "$enroll_url" ] || usage
+  [ -n "$token_file" ] || [ -n "$enroll_token" ] || usage
+elif [ -n "$token_file" ] || [ -n "$enroll_token" ]; then
+  [ -n "$enroll_url" ] || usage
+fi
+
+if [ -n "$enroll_url" ]; then
+  case "$enroll_url" in
+    https://*) ;;
+    *) echo "enrollment URL must use https://" >&2; exit 1 ;;
+  esac
+fi
 
 case "$(uname -m)" in
   x86_64|amd64) arch="amd64" ;;
