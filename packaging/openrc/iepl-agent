@@ -16,6 +16,6 @@ depend() {
 }
 
 start_pre() {
-	checkpath -d -o iepl-agent -g iepl-agent -m 0700 /run/iepl-agent
-	checkpath -d -o iepl-agent -g iepl-agent -m 0700 /var/log/iepl-agent
+	checkpath -d -o iepl-agent:iepl-agent -m 0700 /run/iepl-agent
+	checkpath -d -o iepl-agent:iepl-agent -m 0700 /var/log/iepl-agent
 }
