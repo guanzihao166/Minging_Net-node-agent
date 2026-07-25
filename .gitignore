@@ -1,5 +1,7 @@
 /dist/
 /build/
+/.gocache/
+/.tmp/
 *.db
 *.db-shm
 *.db-wal

@@ -14,6 +14,7 @@ import (
 	"github.com/guanzihao166/iepl-node-agent/internal/config"
 	"github.com/guanzihao166/iepl-node-agent/internal/control"
 	"github.com/guanzihao166/iepl-node-agent/internal/identity"
+	"github.com/guanzihao166/iepl-node-agent/internal/maintenance"
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 	agentruntime "github.com/guanzihao166/iepl-node-agent/internal/runtime"
 	"github.com/guanzihao166/iepl-node-agent/internal/secretstore"
@@ -51,6 +52,14 @@ func run(args []string, logger *slog.Logger) error {
 	id, certificate, signingKey, err := identity.Load(cfg)
 	if err != nil {
 		return fmt.Errorf("load agent identity: %w", err)
+	}
+	if cfg.Command == "maintain" {
+		manager, err := maintenance.NewManager(cfg, id, signingKey, version, logger)
+		if err != nil {
+			return err
+		}
+		logger.Info("agent maintenance manager started", "version", version, "agent_node_id", id.AgentNodeID)
+		return manager.Run(ctx)
 	}
 	stateStore, err := state.Open(ctx, cfg.StateDBPath())
 	if err != nil {

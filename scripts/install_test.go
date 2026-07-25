@@ -19,6 +19,11 @@ func TestInstallerPreservesOpenRCPermissionsAndResetsReenrollmentState(t *testin
 		`for name in agent.db agent.db-shm agent.db-wal`,
 		`restore_reenroll_state || true`,
 		`enrollment_completed=1`,
+		`iepl-agent-maintenance.service`,
+		`iepl-agent-maintenance.openrc`,
+		`maintenance_service_restart || rollback_install`,
+		`maintenance_service_active`,
+		`/var/lib/iepl-agent-maintenance`,
 	} {
 		if !strings.Contains(script, marker) {
 			t.Errorf("installer missing reenrollment safety marker %q", marker)

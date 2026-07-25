@@ -88,20 +88,40 @@ is_alpine=0
 service_mode=""
 service_path=""
 service_source=""
+maintenance_service_path=""
+maintenance_service_source=""
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
   service_mode="systemd"
   service_path="/etc/systemd/system/iepl-agent.service"
   service_source="$tmp/iepl-agent.service"
+  maintenance_service_path="/etc/systemd/system/iepl-agent-maintenance.service"
+  maintenance_service_source="$tmp/iepl-agent-maintenance.service"
   fetch "${release_base}/iepl-agent.service" "$service_source"
+  fetch "${release_base}/iepl-agent-maintenance.service" "$maintenance_service_source"
 elif command -v rc-service >/dev/null 2>&1 || [ "$is_alpine" -eq 1 ]; then
   service_mode="openrc"
   service_path="/etc/init.d/iepl-agent"
   service_source="$tmp/iepl-agent.openrc"
+  maintenance_service_path="/etc/init.d/iepl-agent-maintenance"
+  maintenance_service_source="$tmp/iepl-agent-maintenance.openrc"
   fetch "${release_base}/iepl-agent.openrc" "$service_source"
+  fetch "${release_base}/iepl-agent-maintenance.openrc" "$maintenance_service_source"
 else
   echo "no supported service manager found; systemd or OpenRC is required" >&2
   exit 1
 fi
+
+verify_asset() {
+  verify_name=$1
+  verify_line="$(awk -v asset="$verify_name" '$2 == asset { print; found = 1; exit } END { if (!found) exit 1 }' "$tmp/checksums.txt")" || {
+    echo "release checksum is missing for $verify_name" >&2
+    exit 1
+  }
+  printf '%s\n' "$verify_line" | (cd "$tmp" && sha256sum -c -)
+}
+
+verify_asset "$(basename "$service_source")"
+verify_asset "$(basename "$maintenance_service_source")"
 
 if ! id iepl-agent >/dev/null 2>&1; then
   if [ "$is_alpine" -eq 1 ]; then
@@ -119,8 +139,10 @@ fi
 
 install -d -o root -g root -m 0755 /opt/iepl-agent/bin
 install -d -o iepl-agent -g iepl-agent -m 0700 /etc/iepl-agent /var/lib/iepl-agent
+install -d -o root -g root -m 0755 /var/lib/iepl-agent-maintenance
+install -d -o iepl-agent -g iepl-agent -m 0700 /run/iepl-agent /run/iepl-agent/maintenance /run/iepl-agent/maintenance/requests
 if [ "$service_mode" = "openrc" ]; then
-  install -d -o iepl-agent -g iepl-agent -m 0700 /run/iepl-agent /var/log/iepl-agent
+  install -d -o iepl-agent -g iepl-agent -m 0700 /var/log/iepl-agent
 fi
 
 install -o root -g root -m 0755 "$tmp/$asset" /opt/iepl-agent/bin/iepl-agent.new
@@ -132,6 +154,7 @@ fi
 
 had_binary=0
 had_service=0
+had_maintenance_service=0
 if [ -f /opt/iepl-agent/bin/iepl-agent ]; then
   install -o root -g root -m 0755 /opt/iepl-agent/bin/iepl-agent /opt/iepl-agent/bin/iepl-agent.previous
   had_binary=1
@@ -141,6 +164,12 @@ if [ -f "$service_path" ]; then
   [ "$service_mode" = "openrc" ] && service_backup_mode=0755
   install -o root -g root -m "$service_backup_mode" "$service_path" "${service_path}.previous"
   had_service=1
+fi
+if [ -f "$maintenance_service_path" ]; then
+  maintenance_backup_mode=0644
+  [ "$service_mode" = "openrc" ] && maintenance_backup_mode=0755
+  install -o root -g root -m "$maintenance_backup_mode" "$maintenance_service_path" "${maintenance_service_path}.previous"
+  had_maintenance_service=1
 fi
 
 service_reload() {
@@ -152,8 +181,10 @@ service_reload() {
 service_enable() {
   if [ "$service_mode" = "systemd" ]; then
     systemctl enable iepl-agent.service
+    systemctl enable iepl-agent-maintenance.service
   else
     rc-update add iepl-agent default
+    rc-update add iepl-agent-maintenance default
   fi
 }
 
@@ -162,6 +193,22 @@ service_restart() {
     systemctl restart iepl-agent.service
   else
     rc-service iepl-agent restart
+  fi
+}
+
+maintenance_service_restart() {
+  if [ "$service_mode" = "systemd" ]; then
+    systemctl restart iepl-agent-maintenance.service
+  else
+    rc-service iepl-agent-maintenance restart
+  fi
+}
+
+maintenance_service_stop() {
+  if [ "$service_mode" = "systemd" ]; then
+    systemctl stop iepl-agent-maintenance.service
+  else
+    rc-service iepl-agent-maintenance stop
   fi
 }
 
@@ -181,6 +228,14 @@ service_active() {
   fi
 }
 
+maintenance_service_active() {
+  if [ "$service_mode" = "systemd" ]; then
+    systemctl is-active --quiet iepl-agent-maintenance.service
+  else
+    rc-service iepl-agent-maintenance status >/dev/null 2>&1
+  fi
+}
+
 reenroll_state_backup=""
 enrollment_completed=0
 
@@ -195,6 +250,7 @@ restore_reenroll_state() {
 
 rollback_install() {
   echo "Agent installation failed; restoring the previous release." >&2
+  maintenance_service_stop || true
   if [ "$had_binary" -eq 1 ]; then
     mv -f /opt/iepl-agent/bin/iepl-agent.previous /opt/iepl-agent/bin/iepl-agent
   else
@@ -205,12 +261,18 @@ rollback_install() {
   else
     rm -f "$service_path"
   fi
+  if [ "$had_maintenance_service" -eq 1 ]; then
+    mv -f "${maintenance_service_path}.previous" "$maintenance_service_path"
+  else
+    rm -f "$maintenance_service_path"
+  fi
   if [ "$enrollment_completed" -eq 0 ]; then
     restore_reenroll_state || true
   fi
   service_reload || true
   if [ "$had_binary" -eq 1 ] && [ -f /etc/iepl-agent/identity.json ]; then
     service_restart || true
+    [ "$had_maintenance_service" -eq 0 ] || maintenance_service_restart || true
   fi
   exit 1
 }
@@ -218,8 +280,10 @@ rollback_install() {
 mv -f /opt/iepl-agent/bin/iepl-agent.new /opt/iepl-agent/bin/iepl-agent
 if [ "$service_mode" = "systemd" ]; then
   install -o root -g root -m 0644 "$service_source" "$service_path"
+  install -o root -g root -m 0644 "$maintenance_service_source" "$maintenance_service_path"
 else
   install -o root -g root -m 0755 "$service_source" "$service_path"
+  install -o root -g root -m 0755 "$maintenance_service_source" "$maintenance_service_path"
 fi
 service_reload || rollback_install
 
@@ -251,11 +315,13 @@ fi
 service_enable || rollback_install
 if [ -f /etc/iepl-agent/identity.json ]; then
   service_restart || rollback_install
+  rm -f /var/lib/iepl-agent-maintenance/ready
+  maintenance_service_restart || rollback_install
   healthy=0
   attempts=0
   while [ "$attempts" -lt 10 ]; do
     attempts=$((attempts + 1))
-    if service_active && [ "$(/opt/iepl-agent/bin/iepl-agent version)" = "$reported_version" ]; then
+    if service_active && maintenance_service_active && [ -r /var/lib/iepl-agent-maintenance/ready ] && [ "$(/opt/iepl-agent/bin/iepl-agent version)" = "$reported_version" ]; then
       healthy=1
       break
     fi

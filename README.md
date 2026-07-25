@@ -31,7 +31,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.14 \
+sh install.sh --version v0.1.15 \
   --enroll-url https://test-vpn-agent-ss.mtmt.top/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
@@ -49,3 +49,22 @@ On Alpine, the installer creates an OpenRC service and enables it with
 `iepl-agent.service` as before. Upgrades preserve the prior binary and service
 unit and restore them automatically when enrollment, service reload, restart,
 or the post-restart health check fails.
+
+## Signed maintenance
+
+Starting with `v0.1.15`, every installation also enables a root-owned
+`iepl-agent-maintenance` service. The normal Agent continues to run as the
+unprivileged `iepl-agent` account. The maintenance service accepts only three
+Ed25519-signed operations from the pinned control-plane key:
+
+- check the public GitHub release once per hour and report the result over WSS;
+- install one exact `vX.Y.Z` release after verifying `checksums.txt`, with
+  automatic binary rollback when the restarted service does not become healthy;
+- remove both services, identity, runtime state, logs, installation directory,
+  and the system account during a confirmed full uninstall.
+
+There is no shell command, URL, path, or argument field in the maintenance
+protocol. Replayed command IDs are stored in a root-only directory. Existing
+installations older than `v0.1.15` need one regular installer upgrade; all later
+checks, updates, and full uninstalls are available from the administrator
+console.

@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+name="iepl-agent-maintenance"
+description="Minging Agents Signed Maintenance Manager"
+command="/opt/iepl-agent/bin/iepl-agent"
+command_args="maintain"
+command_user="root:root"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/iepl-agent/maintenance.log"
+error_log="/var/log/iepl-agent/maintenance-error.log"
+
+depend() {
+	need net
+	after iepl-agent
+}
+
+start_pre() {
+	checkpath -d -o iepl-agent:iepl-agent -m 0700 /run/iepl-agent
+	checkpath -d -o iepl-agent:iepl-agent -m 0700 /run/iepl-agent/maintenance
+	checkpath -d -o root:root -m 0755 /var/lib/iepl-agent-maintenance
+	checkpath -d -o iepl-agent:iepl-agent -m 0700 /var/log/iepl-agent
+}

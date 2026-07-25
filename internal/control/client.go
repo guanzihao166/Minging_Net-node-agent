@@ -19,6 +19,7 @@ import (
 
 	"github.com/guanzihao166/iepl-node-agent/internal/config"
 	"github.com/guanzihao166/iepl-node-agent/internal/identity"
+	"github.com/guanzihao166/iepl-node-agent/internal/maintenance"
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 	agentruntime "github.com/guanzihao166/iepl-node-agent/internal/runtime"
 	"github.com/guanzihao166/iepl-node-agent/internal/secretstore"
@@ -26,17 +27,20 @@ import (
 )
 
 type Client struct {
-	cfg        config.Config
-	identity   *identity.Identity
-	cert       tls.Certificate
-	signingKey ed25519.PublicKey
-	store      *state.Store
-	secrets    *secretstore.Store
-	runtime    agentruntime.Runtime
-	logger     *slog.Logger
-	bootID     string
-	now        func() time.Time
-	rootCAs    *x509.CertPool
+	cfg             config.Config
+	identity        *identity.Identity
+	cert            tls.Certificate
+	signingKey      ed25519.PublicKey
+	store           *state.Store
+	secrets         *secretstore.Store
+	runtime         agentruntime.Runtime
+	logger          *slog.Logger
+	bootID          string
+	now             func() time.Time
+	rootCAs         *x509.CertPool
+	maintenance     *maintenance.Controller
+	maintenanceMu   sync.Mutex
+	lastUpdateCheck time.Time
 }
 
 func New(cfg config.Config, id *identity.Identity, certificate tls.Certificate, signingKey ed25519.PublicKey, store *state.Store, secrets *secretstore.Store, runtime agentruntime.Runtime, logger *slog.Logger) (*Client, error) {
@@ -46,9 +50,17 @@ func New(cfg config.Config, id *identity.Identity, certificate tls.Certificate, 
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if cfg.UpdateCheckInterval < time.Minute {
+		cfg.UpdateCheckInterval = time.Hour
+	}
+	maintenanceController, err := maintenance.NewController(cfg, id, signingKey, cfg.Version)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
 		cfg: cfg, identity: id, cert: certificate, signingKey: append(ed25519.PublicKey(nil), signingKey...),
 		store: store, secrets: secrets, runtime: runtime, logger: logger, bootID: uuid.NewString(), now: time.Now,
+		maintenance: maintenanceController,
 	}, nil
 }
 
@@ -146,8 +158,9 @@ func (c *Client) runSession(ctx context.Context) error {
 
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go c.runHeartbeatAndTraffic(sessionCtx, writer, helloAck.SessionID, errCh)
+	go c.runMaintenance(sessionCtx, writer, errCh)
 	go func() {
 		<-sessionCtx.Done()
 		_ = connection.Close()
@@ -193,6 +206,15 @@ func (c *Client) runSession(ctx context.Context) error {
 				return err
 			}
 		case agentprotocol.TypeHeartbeatAck:
+		case agentprotocol.TypeMaintenanceCommand:
+			var command agentprotocol.SignedMaintenanceCommand
+			if err := agentprotocol.DecodePayload(envelope, &command); err != nil {
+				return err
+			}
+			result := c.maintenance.HandleCommand(sessionCtx, command)
+			if err := writer.send(agentprotocol.TypeMaintenanceResult, result); err != nil {
+				return err
+			}
 		case agentprotocol.TypeError:
 			return errors.New("control server returned an error")
 		default:
@@ -202,6 +224,69 @@ func (c *Client) runSession(ctx context.Context) error {
 		case err := <-errCh:
 			return err
 		default:
+		}
+	}
+}
+
+func (c *Client) runMaintenance(ctx context.Context, writer *sessionWriter, errCh chan<- error) {
+	checkPollInterval := c.cfg.UpdateCheckInterval
+	if checkPollInterval > time.Minute {
+		checkPollInterval = time.Minute
+	}
+	checkTicker := time.NewTicker(checkPollInterval)
+	resultTicker := time.NewTicker(3 * time.Second)
+	defer checkTicker.Stop()
+	defer resultTicker.Stop()
+	check := func() bool {
+		c.maintenanceMu.Lock()
+		if !c.lastUpdateCheck.IsZero() && c.now().Sub(c.lastUpdateCheck) < c.cfg.UpdateCheckInterval {
+			c.maintenanceMu.Unlock()
+			return true
+		}
+		c.lastUpdateCheck = c.now()
+		c.maintenanceMu.Unlock()
+		result := c.maintenance.CheckUpdate(ctx, uuid.NewString())
+		if err := writer.send(agentprotocol.TypeMaintenanceResult, result); err != nil {
+			sendSessionError(errCh, err)
+			return false
+		}
+		return true
+	}
+	takeResult := func() bool {
+		result, err := c.maintenance.CompletedResult()
+		if err != nil {
+			c.logger.Warn("read completed maintenance result", "error", err)
+			return true
+		}
+		if result == nil {
+			return true
+		}
+		if err := writer.send(agentprotocol.TypeMaintenanceResult, *result); err != nil {
+			sendSessionError(errCh, err)
+			return false
+		}
+		if err := c.maintenance.ClearCompletedResult(result.CommandID); err != nil {
+			c.logger.Warn("acknowledge completed maintenance result", "error", err)
+		}
+		return true
+	}
+	// The completion result is sent last so a reconnecting upgrade is not
+	// immediately hidden by the routine release check status.
+	if !check() || !takeResult() {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-checkTicker.C:
+			if !check() {
+				return
+			}
+		case <-resultTicker.C:
+			if !takeResult() {
+				return
+			}
 		}
 	}
 }

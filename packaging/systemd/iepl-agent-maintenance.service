@@ -1,0 +1,27 @@
+[Unit]
+Description=Minging Agents Signed Maintenance Manager
+Documentation=https://github.com/guanzihao166/iepl-node-agent
+After=network-online.target iepl-agent.service
+Wants=network-online.target iepl-agent.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/opt/iepl-agent/bin/iepl-agent maintain
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
