@@ -202,7 +202,24 @@ func (m *Manager) processRequest(ctx context.Context, path string) error {
 	if err := m.markProcessed(marker); err != nil {
 		return err
 	}
-	return m.writeResult(result)
+	if err := m.writeResult(result); err != nil {
+		return err
+	}
+	if result.Status == "succeeded" {
+		m.version = signed.Command.TargetVersion
+		arguments := []string{
+			"/opt/iepl-agent/bin/iepl-agent", "maintain",
+			"--state-dir", m.cfg.StateDir,
+			"--config-dir", m.cfg.ConfigDir,
+			"--runtime-dir", m.cfg.RuntimeDir,
+			"--maintenance-dir", m.cfg.MaintenanceDir,
+			"--maintenance-state-dir", m.cfg.MaintenanceStateDir,
+		}
+		if err := replaceProcess(arguments[0], arguments, os.Environ()); err != nil {
+			return fmt.Errorf("activate updated maintenance manager: %w", err)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) installRelease(ctx context.Context, targetVersion string) error {

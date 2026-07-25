@@ -31,7 +31,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.15 \
+sh install.sh --version v0.1.16 \
   --enroll-url https://test-vpn-agent-ss.mtmt.top/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
@@ -59,7 +59,8 @@ Ed25519-signed operations from the pinned control-plane key:
 
 - check the public GitHub release once per hour and report the result over WSS;
 - install one exact `vX.Y.Z` release after verifying `checksums.txt`, with
-  automatic binary rollback when the restarted service does not become healthy;
+  automatic binary rollback when the restarted service does not become healthy,
+  then replace the root maintenance process in place with the verified release;
 - remove both services, identity, runtime state, logs, installation directory,
   and the system account during a confirmed full uninstall.
 
