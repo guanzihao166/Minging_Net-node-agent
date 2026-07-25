@@ -239,14 +239,6 @@ func (m *Manager) installRelease(ctx context.Context, targetVersion string) erro
 	if err != nil {
 		return err
 	}
-	binary, err := m.download(ctx, base+"/"+asset, 256*1024*1024)
-	if err != nil {
-		return err
-	}
-	digest := sha256.Sum256(binary)
-	if !strings.EqualFold(expected, hex.EncodeToString(digest[:])) {
-		return errors.New("release binary checksum mismatch")
-	}
 	binDir := "/opt/iepl-agent/bin"
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return err
@@ -261,9 +253,14 @@ func (m *Manager) installRelease(ctx context.Context, targetVersion string) erro
 		temporary.Close()
 		return err
 	}
-	if _, err := temporary.Write(binary); err != nil {
+	digest, err := m.downloadToFile(ctx, base+"/"+asset, temporary, 256*1024*1024)
+	if err != nil {
 		temporary.Close()
 		return err
+	}
+	if !strings.EqualFold(expected, digest) {
+		temporary.Close()
+		return errors.New("release binary checksum mismatch")
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
@@ -328,6 +325,37 @@ func (m *Manager) download(ctx context.Context, source string, limit int64) ([]b
 		return nil, errors.New("release asset exceeds size limit")
 	}
 	return raw, nil
+}
+
+func (m *Manager) downloadToFile(ctx context.Context, source string, destination *os.File, limit int64) (string, error) {
+	if destination == nil || limit <= 0 {
+		return "", errors.New("release download destination is invalid")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("User-Agent", "Minging-Agents-Maintenance/"+m.version)
+	response, err := m.client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("release download returned HTTP %d", response.StatusCode)
+	}
+	if response.ContentLength > limit {
+		return "", errors.New("release asset exceeds size limit")
+	}
+	hasher := sha256.New()
+	written, err := io.Copy(io.MultiWriter(destination, hasher), io.LimitReader(response.Body, limit+1))
+	if err != nil {
+		return "", err
+	}
+	if written > limit {
+		return "", errors.New("release asset exceeds size limit")
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func checksumForAsset(raw []byte, asset string) (string, error) {
