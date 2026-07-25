@@ -137,7 +137,9 @@ if [ -f /opt/iepl-agent/bin/iepl-agent ]; then
   had_binary=1
 fi
 if [ -f "$service_path" ]; then
-  install -o root -g root -m 0644 "$service_path" "${service_path}.previous"
+  service_backup_mode=0644
+  [ "$service_mode" = "openrc" ] && service_backup_mode=0755
+  install -o root -g root -m "$service_backup_mode" "$service_path" "${service_path}.previous"
   had_service=1
 fi
 
@@ -163,12 +165,32 @@ service_restart() {
   fi
 }
 
+service_stop() {
+  if [ "$service_mode" = "systemd" ]; then
+    systemctl stop iepl-agent.service
+  else
+    rc-service iepl-agent stop
+  fi
+}
+
 service_active() {
   if [ "$service_mode" = "systemd" ]; then
     systemctl is-active --quiet iepl-agent.service
   else
     rc-service iepl-agent status >/dev/null 2>&1
   fi
+}
+
+reenroll_state_backup=""
+enrollment_completed=0
+
+restore_reenroll_state() {
+  [ -n "$reenroll_state_backup" ] || return 0
+  for name in agent.db agent.db-shm agent.db-wal; do
+    if [ -e "$reenroll_state_backup/$name" ]; then
+      mv -f "$reenroll_state_backup/$name" "/var/lib/iepl-agent/$name"
+    fi
+  done
 }
 
 rollback_install() {
@@ -182,6 +204,9 @@ rollback_install() {
     mv -f "${service_path}.previous" "$service_path"
   else
     rm -f "$service_path"
+  fi
+  if [ "$enrollment_completed" -eq 0 ]; then
+    restore_reenroll_state || true
   fi
   service_reload || true
   if [ "$had_binary" -eq 1 ] && [ -f /etc/iepl-agent/identity.json ]; then
@@ -206,7 +231,20 @@ if [ -n "$token_file" ]; then
   [ -f "$token_file" ] || { echo "enrollment token file does not exist" >&2; rollback_install; }
   mode="$(stat -c '%a' "$token_file" 2>/dev/null || stat -f '%Lp' "$token_file")"
   [ "$mode" = "600" ] || { echo "enrollment token file must have mode 600" >&2; rollback_install; }
+  if [ -f /etc/iepl-agent/identity.json ]; then
+    if service_active; then
+      service_stop || rollback_install
+    fi
+    reenroll_state_backup="$tmp/previous-state"
+    mkdir -p "$reenroll_state_backup"
+    for name in agent.db agent.db-shm agent.db-wal; do
+      if [ -e "/var/lib/iepl-agent/$name" ]; then
+        mv "/var/lib/iepl-agent/$name" "$reenroll_state_backup/$name"
+      fi
+    done
+  fi
   /opt/iepl-agent/bin/iepl-agent enroll --url "$enroll_url" --token-file "$token_file" || rollback_install
+  enrollment_completed=1
   chown -R iepl-agent:iepl-agent /etc/iepl-agent /var/lib/iepl-agent
 fi
 
