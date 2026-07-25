@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
@@ -264,7 +265,11 @@ func (r *XrayRuntime) panelNodeForInbound(desired agentprotocol.DesiredConfig, i
 		if err != nil {
 			return nil, fmt.Errorf("resolve SS2022 server key: %w", err)
 		}
-		protocol.ServerKey = strings.TrimSpace(string(serverKey))
+		serverKey, err = normalizeSS2022Key(inbound.SS2022.Method, serverKey)
+		if err != nil {
+			return nil, fmt.Errorf("normalize SS2022 server key: %w", err)
+		}
+		protocol.ServerKey = string(serverKey)
 	case agentprotocol.ProtocolTUIC:
 		info.Type, protocol.Type = "tuic", "tuic"
 		protocol.CongestionController = inbound.TUIC.CongestionControl
@@ -405,12 +410,8 @@ func validateRuntimeCredential(inbound agentprotocol.Inbound, value string) erro
 			return errors.New("credential must be a UUID")
 		}
 	case agentprotocol.ProtocolSS2022:
-		length := 32
-		if inbound.SS2022.Method == "2022-blake3-aes-128-gcm" {
-			length = 16
-		}
-		if len(value) < length {
-			return errors.New("SS2022 credential is too short")
+		if _, err := normalizeSS2022Key(inbound.SS2022.Method, []byte(value)); err != nil {
+			return errors.New("SS2022 credential is invalid")
 		}
 	case agentprotocol.ProtocolTrojan, agentprotocol.ProtocolHysteria2:
 		if len(value) < 8 || len(value) > 255 {
@@ -418,6 +419,25 @@ func validateRuntimeCredential(inbound agentprotocol.Inbound, value string) erro
 		}
 	}
 	return nil
+}
+
+func normalizeSS2022Key(method string, material []byte) ([]byte, error) {
+	length := 32
+	if method == "2022-blake3-aes-128-gcm" {
+		length = 16
+	}
+	if len(material) == length {
+		return append([]byte(nil), material...), nil
+	}
+	encoded := strings.TrimSpace(string(material))
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(encoded)
+	}
+	if err != nil || len(decoded) != length {
+		return nil, errors.New("key length does not match the SS2022 method")
+	}
+	return decoded, nil
 }
 
 func applyExpiryAndLimits(limiter interface {

@@ -279,15 +279,28 @@ func buildSSUser(tag string, userInfo *panel.UserInfo, cypher string, serverKey 
 		case "2022-blake3-chacha20-poly1305":
 			keyLength = 32
 		}
-		ssAccount := &shadowsocks_2022.Account{
-			Key: base64.StdEncoding.EncodeToString([]byte(userInfo.Uuid[:keyLength])),
-		}
+		ssAccount := &shadowsocks_2022.Account{Key: normalizeSS2022UserKey(userInfo.Uuid, keyLength)}
 		return &protocol.User{
 			Level:   0,
 			Email:   format.UserTag(tag, userInfo.Uuid),
 			Account: serial.ToTypedMessage(ssAccount),
 		}
 	}
+}
+
+func normalizeSS2022UserKey(value string, keyLength int) string {
+	encoded := strings.TrimSpace(value)
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(encoded)
+	}
+	if err == nil && len(decoded) == keyLength {
+		return base64.StdEncoding.EncodeToString(decoded)
+	}
+	if len(value) < keyLength {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString([]byte(value[:keyLength]))
 }
 
 func getCipherFromString(c string) shadowsocks.CipherType {

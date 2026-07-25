@@ -31,7 +31,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.12 \
+sh install.sh --version v0.1.14 \
   --enroll-url https://test-vpn-agent-ss.mtmt.top/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```

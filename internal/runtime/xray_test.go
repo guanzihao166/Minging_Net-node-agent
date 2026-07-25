@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"path/filepath"
@@ -16,6 +18,8 @@ import (
 	"time"
 
 	inboundbuilder "github.com/perfect-panel/ppanel-node/core/inbound"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	M "github.com/sagernet/sing/common/metadata"
 
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 	"github.com/guanzihao166/iepl-node-agent/internal/secretstore"
@@ -64,6 +68,136 @@ func TestBuildsAllRequiredXrayProtocolFamilies(t *testing.T) {
 	}
 	if nodes[4].info.Type != "hysteria2" || nodes[4].info.Protocol.HopPorts != "30000-30002" || nodes[4].info.Protocol.ObfsPassword == "" {
 		t.Fatalf("Hysteria2 mapping = %#v", nodes[4].info.Protocol)
+	}
+}
+
+func TestSS2022NormalizesLegacyAndRawServerKeyMaterial(t *testing.T) {
+	rawKey := bytes.Repeat([]byte{0x5a}, 32)
+	for name, material := range map[string][]byte{
+		"raw":           rawKey,
+		"legacy-base64": []byte(base64.StdEncoding.EncodeToString(rawKey)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			secrets := testRuntimeSecrets(t)
+			if err := secrets.Put("agent-secret:ss2022-server:51:1", material); err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := NewXray(secrets)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nodes, err := runtime.buildNodes(testDesiredConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := []byte(nodes[2].info.Protocol.ServerKey); !bytes.Equal(got, rawKey) {
+				t.Fatalf("normalized server key = %x, want %x", got, rawKey)
+			}
+		})
+	}
+}
+
+func TestSS2022RuntimeCredentialRequiresExactDecodedKeyLength(t *testing.T) {
+	inbound := testDesiredConfig().Inbounds[2]
+	valid := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x2a}, 32))
+	if err := validateRuntimeCredential(inbound, valid); err != nil {
+		t.Fatalf("valid credential rejected: %v", err)
+	}
+	for _, invalid := range []string{"short", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x2a}, 16))} {
+		if err := validateRuntimeCredential(inbound, invalid); err == nil {
+			t.Fatalf("invalid credential %q was accepted", invalid)
+		}
+	}
+}
+
+func TestSS2022StandardKeysCompleteTCPRoundTrip(t *testing.T) {
+	serverKey := bytes.Repeat([]byte{0x31}, 32)
+	userKey := bytes.Repeat([]byte{0x42}, 32)
+	for name, serverMaterial := range map[string][]byte{
+		"raw-server-secret":    serverKey,
+		"legacy-server-secret": []byte(base64.StdEncoding.EncodeToString(serverKey)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			secrets := testRuntimeSecrets(t)
+			if err := secrets.Put("agent-secret:ss2022-server:51:1", serverMaterial); err != nil {
+				t.Fatal(err)
+			}
+			desired := testDesiredConfig()
+			desired.Security = nil
+			desired.Inbounds = []agentprotocol.Inbound{desired.Inbounds[2]}
+			desired.Inbounds[0].Port = availableProtocolPortBlock(t)
+			runtime, err := NewXray(secrets)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			if err := runtime.ApplyConfig(context.Background(), desired); err != nil {
+				t.Fatalf("ApplyConfig: %v", err)
+			}
+			if err := runtime.ApplyUsers(context.Background(), []agentprotocol.UserCredential{{
+				SubscriberID: 501, InboundID: 51, Kind: "key",
+				Value: base64.StdEncoding.EncodeToString(userKey),
+			}}); err != nil {
+				t.Fatalf("ApplyUsers: %v", err)
+			}
+
+			target, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer target.Close()
+			targetResult := make(chan error, 1)
+			go func() {
+				connection, err := target.Accept()
+				if err != nil {
+					targetResult <- err
+					return
+				}
+				defer connection.Close()
+				_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+				request := make([]byte, 4)
+				if _, err := io.ReadFull(connection, request); err != nil {
+					targetResult <- err
+					return
+				}
+				if string(request) != "ping" {
+					targetResult <- fmt.Errorf("target request = %q", request)
+					return
+				}
+				_, err = connection.Write([]byte("pong"))
+				targetResult <- err
+			}()
+
+			transport, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", desired.Inbounds[0].Port), 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := shadowaead_2022.New(desired.Inbounds[0].SS2022.Method, [][]byte{serverKey, userKey}, nil)
+			if err != nil {
+				transport.Close()
+				t.Fatal(err)
+			}
+			connection, err := client.DialConn(transport, M.ParseSocksaddr(target.Addr().String()))
+			if err != nil {
+				transport.Close()
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+			if _, err := connection.Write([]byte("ping")); err != nil {
+				t.Fatal(err)
+			}
+			response := make([]byte, 4)
+			if _, err := io.ReadFull(connection, response); err != nil {
+				t.Fatal(err)
+			}
+			if string(response) != "pong" {
+				t.Fatalf("response = %q", response)
+			}
+			if err := <-targetResult; err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
