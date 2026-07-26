@@ -158,11 +158,17 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 		MemoryUsedBytes: 3, MemoryTotalBytes: 8, NetworkReceiveBPS: 2048,
 		NetworkTransmitBPS: 1024, UptimeSeconds: 600,
 	}}
-	_ = client.runSession(ctx)
+	established := make(chan struct{}, 1)
+	_ = client.runSessionWithEstablished(ctx, func() { established <- struct{}{} })
 	select {
 	case <-done:
 	default:
 		t.Fatal("server never accepted traffic")
+	}
+	select {
+	case <-established:
+	default:
+		t.Fatal("acknowledged heartbeat did not establish the reconnect session")
 	}
 	runtimeState, err := store.RuntimeState(ctx)
 	if err != nil {
@@ -263,6 +269,26 @@ func TestControlSessionLoadsStateBeforeDial(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("control session did not stop")
+	}
+}
+
+func TestReconnectScheduleResetsAfterEstablishedSession(t *testing.T) {
+	minimum := time.Second
+	maximum := time.Minute
+
+	wait, next := reconnectSchedule(maximum, minimum, maximum, true)
+	if wait != minimum || next != 2*minimum {
+		t.Fatalf("established reconnect schedule = %s, %s; want %s, %s", wait, next, minimum, 2*minimum)
+	}
+
+	wait, next = reconnectSchedule(next, minimum, maximum, false)
+	if wait != 2*minimum || next != 4*minimum {
+		t.Fatalf("pre-handshake failure schedule = %s, %s; want %s, %s", wait, next, 2*minimum, 4*minimum)
+	}
+
+	wait, next = reconnectSchedule(maximum, minimum, maximum, false)
+	if wait != maximum || next != maximum {
+		t.Fatalf("capped reconnect schedule = %s, %s; want %s, %s", wait, next, maximum, maximum)
 	}
 }
 

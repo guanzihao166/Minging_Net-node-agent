@@ -32,7 +32,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.20 \
+sh install.sh --version v0.1.21 \
   --enroll-url https://www.m7mt.com/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
@@ -87,3 +87,8 @@ server-wide realtime bandwidth aligned with the one-second Xray counter sample.
 Starting with `v0.1.20`, the Agent reads its local runtime state before opening
 the control WSS connection. Slow local storage therefore cannot consume the
 server hello deadline and leave an otherwise healthy server offline.
+
+Starting with `v0.1.21`, the first acknowledged heartbeat resets reconnect
+backoff to one second. A node with an intermittent transport no longer remains
+offline for the prior 60-second maximum after every healthy session, while
+pre-health failures still retain exponential backoff.

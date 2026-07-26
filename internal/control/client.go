@@ -79,23 +79,33 @@ func (c *Client) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		err := c.runSession(ctx)
+		established := false
+		err := c.runSessionWithEstablished(ctx, func() { established = true })
 		if ctx.Err() != nil {
 			return nil
 		}
-		c.logger.Warn("agent control session ended", "error", err, "retry_in", delay)
-		timer := time.NewTimer(delay)
+		wait, next := reconnectSchedule(delay, c.cfg.ReconnectMin, c.cfg.ReconnectMax, established)
+		c.logger.Warn("agent control session ended", "error", err, "retry_in", wait, "session_established", established)
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return nil
 		case <-timer.C:
 		}
-		delay *= 2
-		if delay > c.cfg.ReconnectMax {
-			delay = c.cfg.ReconnectMax
-		}
+		delay = next
 	}
+}
+
+func reconnectSchedule(current, minimum, maximum time.Duration, established bool) (time.Duration, time.Duration) {
+	if established || current < minimum {
+		current = minimum
+	}
+	next := current * 2
+	if current >= maximum || next < current || next > maximum {
+		next = maximum
+	}
+	return current, next
 }
 
 type sessionWriter struct {
@@ -116,6 +126,10 @@ func (w *sessionWriter) send(messageType string, payload any) error {
 }
 
 func (c *Client) runSession(ctx context.Context) error {
+	return c.runSessionWithEstablished(ctx, nil)
+}
+
+func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished func()) error {
 	loadRuntimeState := c.loadRuntimeState
 	if loadRuntimeState == nil {
 		loadRuntimeState = c.store.RuntimeState
@@ -179,6 +193,7 @@ func (c *Client) runSession(ctx context.Context) error {
 		_ = connection.Close()
 	}()
 	secretVersions := make(map[uint64]struct{})
+	established := false
 	for {
 		_ = connection.SetReadDeadline(c.now().Add(2*c.cfg.HeartbeatInterval + 30*time.Second))
 		messageType, raw, err := connection.ReadMessage()
@@ -219,6 +234,12 @@ func (c *Client) runSession(ctx context.Context) error {
 				return err
 			}
 		case agentprotocol.TypeHeartbeatAck:
+			if !established {
+				established = true
+				if onEstablished != nil {
+					onEstablished()
+				}
+			}
 		case agentprotocol.TypeMaintenanceCommand:
 			var command agentprotocol.SignedMaintenanceCommand
 			if err := agentprotocol.DecodePayload(envelope, &command); err != nil {
