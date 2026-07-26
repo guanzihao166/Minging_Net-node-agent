@@ -57,14 +57,26 @@ type HelloAck struct {
 }
 
 type Heartbeat struct {
-	SessionID            string `json:"session_id"`
-	AppliedConfigVersion uint64 `json:"applied_config_version"`
-	AppliedConfigHash    string `json:"applied_config_hash"`
-	AppliedUserRevision  uint64 `json:"applied_user_revision"`
-	WALPendingBatches    uint64 `json:"wal_pending_batches"`
-	WALPendingBytes      uint64 `json:"wal_pending_bytes"`
-	XrayRunning          bool   `json:"xray_running"`
-	XrayVersion          string `json:"xray_version,omitempty"`
+	SessionID            string         `json:"session_id"`
+	AppliedConfigVersion uint64         `json:"applied_config_version"`
+	AppliedConfigHash    string         `json:"applied_config_hash"`
+	AppliedUserRevision  uint64         `json:"applied_user_revision"`
+	WALPendingBatches    uint64         `json:"wal_pending_batches"`
+	WALPendingBytes      uint64         `json:"wal_pending_bytes"`
+	XrayRunning          bool           `json:"xray_running"`
+	XrayVersion          string         `json:"xray_version,omitempty"`
+	SystemMetrics        *SystemMetrics `json:"system_metrics,omitempty"`
+}
+
+type SystemMetrics struct {
+	SampledAt          time.Time `json:"sampled_at"`
+	CPUPercent         float64   `json:"cpu_percent"`
+	MemoryPercent      float64   `json:"memory_percent"`
+	MemoryUsedBytes    uint64    `json:"memory_used_bytes"`
+	MemoryTotalBytes   uint64    `json:"memory_total_bytes"`
+	NetworkReceiveBPS  uint64    `json:"network_receive_bps"`
+	NetworkTransmitBPS uint64    `json:"network_transmit_bps"`
+	UptimeSeconds      uint64    `json:"uptime_seconds"`
 }
 
 type ConfigResult struct {

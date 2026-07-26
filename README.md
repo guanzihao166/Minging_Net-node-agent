@@ -4,8 +4,9 @@ Private node-side runtime for the iepl-go control plane.
 
 The Agent enrolls once with a short-lived token, pins the control-plane CA and
 Ed25519 configuration key, then maintains one outbound mTLS WebSocket. Desired
-Xray state, user revisions, heartbeats, online state and durable traffic
-batches all use that channel. There are no public management ports on a node.
+Xray state, user revisions, heartbeats, host CPU/memory/network metrics, online
+state and durable traffic batches all use that channel. There are no public
+management ports on a node.
 
 Supported inbound families:
 
@@ -31,8 +32,8 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.16 \
-  --enroll-url https://test-vpn-agent-ss.mtmt.top/api/v1/agent/enroll \
+sh install.sh --version v0.1.18 \
+  --enroll-url https://www.m7mt.com/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
 
@@ -69,3 +70,12 @@ protocol. Replayed command IDs are stored in a root-only directory. Existing
 installations older than `v0.1.15` need one regular installer upgrade; all later
 checks, updates, and full uninstalls are available from the administrator
 console.
+
+## Host metrics
+
+Starting with `v0.1.18`, the Agent samples Linux `/proc` on each heartbeat and
+reports CPU utilization, memory utilization, aggregate receive/transmit rates
+for non-loopback interfaces, and host uptime. The control plane stores one
+rolling sample per server per minute and combines it with the existing online
+user ledger. Metrics use the established outbound mTLS WebSocket and do not
+open a monitoring port on the server.

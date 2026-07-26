@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/guanzihao166/iepl-node-agent/internal/config"
+	"github.com/guanzihao166/iepl-node-agent/internal/hostmetrics"
 	"github.com/guanzihao166/iepl-node-agent/internal/identity"
 	"github.com/guanzihao166/iepl-node-agent/internal/maintenance"
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
@@ -40,7 +41,13 @@ type Client struct {
 	rootCAs         *x509.CertPool
 	maintenance     *maintenance.Controller
 	maintenanceMu   sync.Mutex
+	runtimeSyncMu   sync.RWMutex
 	lastUpdateCheck time.Time
+	hostMetrics     hostMetricsSampler
+}
+
+type hostMetricsSampler interface {
+	Sample() (hostmetrics.Snapshot, error)
 }
 
 func New(cfg config.Config, id *identity.Identity, certificate tls.Certificate, signingKey ed25519.PublicKey, store *state.Store, secrets *secretstore.Store, runtime agentruntime.Runtime, logger *slog.Logger) (*Client, error) {
@@ -60,7 +67,7 @@ func New(cfg config.Config, id *identity.Identity, certificate tls.Certificate, 
 	return &Client{
 		cfg: cfg, identity: id, cert: certificate, signingKey: append(ed25519.PublicKey(nil), signingKey...),
 		store: store, secrets: secrets, runtime: runtime, logger: logger, bootID: uuid.NewString(), now: time.Now,
-		maintenance: maintenanceController,
+		maintenance: maintenanceController, hostMetrics: hostmetrics.NewCollector(),
 	}, nil
 }
 
@@ -312,6 +319,21 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				return
 			}
 			runtimeStatus := c.runtime.Status(ctx)
+			var systemMetrics *agentprotocol.SystemMetrics
+			if c.hostMetrics != nil {
+				sample, sampleErr := c.hostMetrics.Sample()
+				if sampleErr != nil {
+					c.logger.Warn("collect host metrics", "error", sampleErr)
+				} else {
+					systemMetrics = &agentprotocol.SystemMetrics{
+						SampledAt: sample.SampledAt, CPUPercent: sample.CPUPercent,
+						MemoryPercent: sample.MemoryPercent, MemoryUsedBytes: sample.MemoryUsedBytes,
+						MemoryTotalBytes:  sample.MemoryTotalBytes,
+						NetworkReceiveBPS: sample.NetworkReceiveBPS, NetworkTransmitBPS: sample.NetworkTransmitBPS,
+						UptimeSeconds: sample.UptimeSeconds,
+					}
+				}
+			}
 			err = writer.send(agentprotocol.TypeHeartbeat, agentprotocol.Heartbeat{
 				SessionID:            sessionID,
 				AppliedConfigVersion: stateValue.AppliedConfigVersion,
@@ -319,6 +341,7 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				AppliedUserRevision:  stateValue.AppliedUserRevision,
 				WALPendingBatches:    pendingBatches, WALPendingBytes: pendingBytes,
 				XrayRunning: runtimeStatus.Running, XrayVersion: runtimeStatus.Version,
+				SystemMetrics: systemMetrics,
 			})
 			if err != nil {
 				sendSessionError(errCh, err)
@@ -338,7 +361,9 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 }
 
 func (c *Client) collectAndSendOnline(ctx context.Context, writer *sessionWriter) error {
+	c.runtimeSyncMu.RLock()
 	online, err := c.runtime.CollectOnline(ctx)
+	c.runtimeSyncMu.RUnlock()
 	if err != nil {
 		return err
 	}
@@ -361,6 +386,8 @@ func (c *Client) applyDesiredConfig(ctx context.Context, writer *sessionWriter, 
 	if _, ok := secretVersions[signed.Config.Version]; !ok {
 		return errors.New("desired config secret envelope is missing")
 	}
+	c.runtimeSyncMu.Lock()
+	defer c.runtimeSyncMu.Unlock()
 	inserted, err := c.store.SaveDesiredConfig(ctx, signed)
 	if err != nil {
 		return err
@@ -415,6 +442,8 @@ func (c *Client) applyUserSnapshot(ctx context.Context, writer *sessionWriter, e
 	if err := agentprotocol.DecodePayload(envelope, &snapshot); err != nil {
 		return err
 	}
+	c.runtimeSyncMu.Lock()
+	defer c.runtimeSyncMu.Unlock()
 	if err := c.runtime.ApplyUsers(ctx, snapshot.Users); err != nil {
 		_ = writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{
 			Revision: snapshot.Revision, Status: "failed", ErrorCode: "user_apply_failed",
@@ -453,7 +482,9 @@ func normalizedCredentialKind(value string) string {
 }
 
 func (c *Client) collectAndSendTraffic(ctx context.Context, writer *sessionWriter) error {
+	c.runtimeSyncMu.RLock()
 	deltas, err := c.runtime.CollectTraffic(ctx)
+	c.runtimeSyncMu.RUnlock()
 	if err != nil {
 		return err
 	}

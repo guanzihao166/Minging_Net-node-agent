@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/guanzihao166/iepl-node-agent/internal/config"
+	"github.com/guanzihao166/iepl-node-agent/internal/hostmetrics"
 	"github.com/guanzihao166/iepl-node-agent/internal/identity"
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 	agentruntime "github.com/guanzihao166/iepl-node-agent/internal/runtime"
@@ -99,6 +100,15 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 			case agentprotocol.TypeUserResult:
 				usersApplied = true
 			case agentprotocol.TypeHeartbeat:
+				var heartbeat agentprotocol.Heartbeat
+				if err := agentprotocol.DecodePayload(envelope, &heartbeat); err != nil {
+					t.Error(err)
+					return
+				}
+				if heartbeat.SystemMetrics == nil || heartbeat.SystemMetrics.CPUPercent != 42.5 || heartbeat.SystemMetrics.NetworkReceiveBPS != 2048 {
+					t.Errorf("heartbeat system metrics = %#v", heartbeat.SystemMetrics)
+					return
+				}
 				writeProtocolEnvelope(t, connection, agentprotocol.TypeHeartbeatAck, map[string]any{"ok": true})
 			case agentprotocol.TypeTrafficBatch:
 				var batch agentprotocol.TrafficBatch
@@ -139,6 +149,11 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 	}
 	client.rootCAs = roots
 	client.bootID = "21fba3f0-54e3-4284-9dc6-fca218c451bd"
+	client.hostMetrics = staticHostMetricsSampler{snapshot: hostmetrics.Snapshot{
+		SampledAt: time.Now().UTC(), CPUPercent: 42.5, MemoryPercent: 37.5,
+		MemoryUsedBytes: 3, MemoryTotalBytes: 8, NetworkReceiveBPS: 2048,
+		NetworkTransmitBPS: 1024, UptimeSeconds: 600,
+	}}
 	_ = client.runSession(ctx)
 	select {
 	case <-done:
@@ -217,3 +232,12 @@ func (f *fakeRuntime) CollectOnline(context.Context) ([]agentprotocol.OnlineUser
 }
 
 func (f *fakeRuntime) Close() error { return nil }
+
+type staticHostMetricsSampler struct {
+	snapshot hostmetrics.Snapshot
+	err      error
+}
+
+func (s staticHostMetricsSampler) Sample() (hostmetrics.Snapshot, error) {
+	return s.snapshot, s.err
+}
