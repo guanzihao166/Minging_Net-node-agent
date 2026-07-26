@@ -32,7 +32,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.19 \
+sh install.sh --version v0.1.20 \
   --enroll-url https://www.m7mt.com/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
@@ -83,3 +83,7 @@ open a monitoring port on the server.
 Starting with `v0.1.19`, traffic batches preserve the real collection window
 instead of measuring the local SQLite write duration. This keeps per-user and
 server-wide realtime bandwidth aligned with the one-second Xray counter sample.
+
+Starting with `v0.1.20`, the Agent reads its local runtime state before opening
+the control WSS connection. Slow local storage therefore cannot consume the
+server hello deadline and leave an otherwise healthy server offline.

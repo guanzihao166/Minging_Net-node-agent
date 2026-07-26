@@ -182,6 +182,90 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 	}
 }
 
+func TestControlSessionLoadsStateBeforeDial(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root := t.TempDir()
+	store, err := state.Open(ctx, filepath.Join(root, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	secrets, err := secretstore.Open(filepath.Join(root, "config"), filepath.Join(root, "run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialed := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		dialed <- struct{}{}
+		connection, upgradeErr := upgrader.Upgrade(writer, request, nil)
+		if upgradeErr != nil {
+			return
+		}
+		defer connection.Close()
+		var hello agentprotocol.Envelope
+		if readErr := connection.ReadJSON(&hello); readErr != nil {
+			return
+		}
+		writeProtocolEnvelope(t, connection, agentprotocol.TypeHelloAck, agentprotocol.HelloAck{
+			ProtocolVersion: agentprotocol.ProtocolVersion, SessionID: "slow-store-session", ServerTime: time.Now().UTC(),
+		})
+	}))
+	defer server.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	id := &identity.Identity{
+		AgentNodeID: 17, MachineID: "82c49a6b-5bd3-4d75-97ca-058d777b3599",
+		WSSURL:             "wss" + strings.TrimPrefix(server.URL, "https"),
+		ConfigSigningKeyID: "test-key", ConfigSigningPublicKey: base64.RawStdEncoding.EncodeToString(publicKey),
+		SecretEnvelopeKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
+	}
+	client, err := New(config.Config{
+		Version: "test", HeartbeatInterval: time.Second, TrafficInterval: time.Second,
+		ReconnectMin: time.Millisecond, ReconnectMax: time.Second, MaxFrameBytes: 1024 * 1024,
+	}, id, tlsCertificateForTest(), publicKey, store, secrets, &fakeRuntime{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.rootCAs = roots
+	stateLoadStarted := make(chan struct{})
+	releaseStateLoad := make(chan struct{})
+	client.loadRuntimeState = func(loadCtx context.Context) (state.RuntimeState, error) {
+		close(stateLoadStarted)
+		select {
+		case <-releaseStateLoad:
+			return store.RuntimeState(loadCtx)
+		case <-loadCtx.Done():
+			return state.RuntimeState{}, loadCtx.Err()
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- client.runSession(ctx) }()
+	<-stateLoadStarted
+	select {
+	case <-dialed:
+		t.Fatal("control WSS dialed before local runtime state was ready")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseStateLoad)
+	select {
+	case <-dialed:
+	case <-time.After(time.Second):
+		t.Fatal("control WSS was not dialed after local runtime state loaded")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control session did not stop")
+	}
+}
+
 func writeProtocolEnvelope(t *testing.T, connection *websocket.Conn, messageType string, payload any) {
 	t.Helper()
 	envelope, err := agentprotocol.NewEnvelope("server-message", messageType, payload, time.Now().UTC())

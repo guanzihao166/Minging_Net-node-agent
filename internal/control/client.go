@@ -44,6 +44,7 @@ type Client struct {
 	runtimeSyncMu          sync.RWMutex
 	lastUpdateCheck        time.Time
 	hostMetrics            hostMetricsSampler
+	loadRuntimeState       func(context.Context) (state.RuntimeState, error)
 	trafficWindowStartedAt time.Time
 }
 
@@ -68,7 +69,7 @@ func New(cfg config.Config, id *identity.Identity, certificate tls.Certificate, 
 	return &Client{
 		cfg: cfg, identity: id, cert: certificate, signingKey: append(ed25519.PublicKey(nil), signingKey...),
 		store: store, secrets: secrets, runtime: runtime, logger: logger, bootID: uuid.NewString(), now: time.Now,
-		maintenance: maintenanceController, hostMetrics: hostmetrics.NewCollector(),
+		maintenance: maintenanceController, hostMetrics: hostmetrics.NewCollector(), loadRuntimeState: store.RuntimeState,
 	}, nil
 }
 
@@ -115,6 +116,14 @@ func (w *sessionWriter) send(messageType string, payload any) error {
 }
 
 func (c *Client) runSession(ctx context.Context) error {
+	loadRuntimeState := c.loadRuntimeState
+	if loadRuntimeState == nil {
+		loadRuntimeState = c.store.RuntimeState
+	}
+	runtimeState, err := loadRuntimeState(ctx)
+	if err != nil {
+		return err
+	}
 	dialer := websocket.Dialer{
 		Proxy: http.ProxyFromEnvironment, HandshakeTimeout: 15 * time.Second,
 		EnableCompression: false,
@@ -134,10 +143,6 @@ func (c *Client) runSession(ctx context.Context) error {
 	defer connection.Close()
 	connection.SetReadLimit(c.cfg.MaxFrameBytes)
 	writer := &sessionWriter{connection: connection, now: c.now}
-	runtimeState, err := c.store.RuntimeState(ctx)
-	if err != nil {
-		return err
-	}
 	hello := agentprotocol.Hello{
 		ProtocolVersion: agentprotocol.ProtocolVersion,
 		MachineID:       c.identity.MachineID, BootID: c.bootID, AgentVersion: c.cfg.Version,
