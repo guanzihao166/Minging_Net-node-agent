@@ -119,6 +119,10 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 				if !configApplied || !usersApplied {
 					t.Error("traffic arrived before desired state was applied")
 				}
+				if duration := batch.IntervalEndedAt.Sub(batch.IntervalStartedAt); duration < 10*time.Millisecond || duration > time.Second {
+					t.Errorf("traffic window = %s, want the real collection interval", duration)
+					return
+				}
 				writeProtocolEnvelope(t, connection, agentprotocol.TypeTrafficAck, agentprotocol.TrafficAck{
 					BootID: batch.BootID, Sequence: batch.Sequence,
 					PayloadSHA256: batch.PayloadSHA256, Status: "accepted",

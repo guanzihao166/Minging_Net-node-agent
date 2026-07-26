@@ -301,10 +301,21 @@ func (s *Store) AppliedConfig(ctx context.Context) (*agentprotocol.SignedConfig,
 }
 
 func (s *Store) AddTraffic(ctx context.Context, deltas []TrafficDelta) error {
+	endedAt := s.now().UTC()
+	return s.AddTrafficWindow(ctx, deltas, endedAt.Add(-time.Second), endedAt)
+}
+
+func (s *Store) AddTrafficWindow(ctx context.Context, deltas []TrafficDelta, startedAt, endedAt time.Time) error {
+	startedAt = startedAt.UTC()
+	endedAt = endedAt.UTC()
+	if startedAt.IsZero() || endedAt.IsZero() || !endedAt.After(startedAt) {
+		return errors.New("traffic collection window is invalid")
+	}
 	if len(deltas) == 0 {
 		return nil
 	}
-	now := s.now().UTC().Format(time.RFC3339Nano)
+	started := startedAt.Format(time.RFC3339Nano)
+	ended := endedAt.Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -320,8 +331,9 @@ func (s *Store) AddTraffic(ctx context.Context, deltas []TrafficDelta) error {
 			ON CONFLICT(subscriber_id, inbound_id, quota_generation) DO UPDATE SET
 			 upload_bytes = upload_bytes + excluded.upload_bytes,
 			 download_bytes = download_bytes + excluded.download_bytes,
-			 updated_at = excluded.updated_at`, delta.SubscriberID, delta.InboundID, delta.QuotaGeneration,
-			delta.UploadBytes, delta.DownloadBytes, now, now)
+			 interval_started_at = MIN(interval_started_at, excluded.interval_started_at),
+			 updated_at = MAX(updated_at, excluded.updated_at)`, delta.SubscriberID, delta.InboundID, delta.QuotaGeneration,
+			delta.UploadBytes, delta.DownloadBytes, started, ended)
 		if err != nil {
 			return err
 		}
@@ -336,24 +348,29 @@ func (s *Store) DrainTraffic(ctx context.Context, bootID string, configVersion u
 	}
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(ctx, `SELECT subscriber_id, inbound_id, quota_generation,
-		upload_bytes, download_bytes, interval_started_at FROM traffic_accumulator
+		upload_bytes, download_bytes, interval_started_at, updated_at FROM traffic_accumulator
 		ORDER BY subscriber_id, inbound_id, quota_generation`)
 	if err != nil {
 		return nil, err
 	}
 	items := make([]agentprotocol.TrafficItem, 0)
 	var intervalStart time.Time
+	var intervalEnd time.Time
 	for rows.Next() {
 		var item agentprotocol.TrafficItem
-		var started string
+		var started, ended string
 		if err := rows.Scan(&item.SubscriberID, &item.InboundID, &item.QuotaGeneration,
-			&item.UploadBytes, &item.DownloadBytes, &started); err != nil {
+			&item.UploadBytes, &item.DownloadBytes, &started, &ended); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		parsed, _ := time.Parse(time.RFC3339Nano, started)
-		if intervalStart.IsZero() || parsed.Before(intervalStart) {
-			intervalStart = parsed
+		parsedStart, _ := time.Parse(time.RFC3339Nano, started)
+		parsedEnd, _ := time.Parse(time.RFC3339Nano, ended)
+		if intervalStart.IsZero() || parsedStart.Before(intervalStart) {
+			intervalStart = parsedStart
+		}
+		if parsedEnd.After(intervalEnd) {
+			intervalEnd = parsedEnd
 		}
 		items = append(items, item)
 	}
@@ -367,10 +384,16 @@ func (s *Store) DrainTraffic(ctx context.Context, bootID string, configVersion u
 	if err := tx.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER) + 1 FROM meta WHERE key = 'traffic_sequence'`).Scan(&sequence); err != nil {
 		return nil, err
 	}
-	now := s.now().UTC()
+	createdAt := s.now().UTC()
+	if intervalEnd.IsZero() {
+		intervalEnd = createdAt
+	}
+	if intervalStart.IsZero() || !intervalEnd.After(intervalStart) {
+		intervalStart = intervalEnd.Add(-time.Second)
+	}
 	batch := agentprotocol.TrafficBatch{
 		BootID: bootID, Sequence: sequence, ConfigVersion: configVersion,
-		IntervalStartedAt: intervalStart, IntervalEndedAt: now, Items: items,
+		IntervalStartedAt: intervalStart, IntervalEndedAt: intervalEnd, Items: items,
 	}
 	batch.PayloadSHA256, err = agentprotocol.TrafficPayloadSHA256(batch)
 	if err != nil {
@@ -382,7 +405,7 @@ func (s *Store) DrainTraffic(ctx context.Context, bootID string, configVersion u
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO traffic_wal
 		(boot_id, sequence, payload_sha256, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`,
-		bootID, sequence, batch.PayloadSHA256, raw, now.Format(time.RFC3339Nano)); err != nil {
+		bootID, sequence, batch.PayloadSHA256, raw, createdAt.Format(time.RFC3339Nano)); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'traffic_sequence'`, strconv.FormatUint(sequence, 10)); err != nil {

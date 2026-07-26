@@ -32,7 +32,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.18 \
+sh install.sh --version v0.1.19 \
   --enroll-url https://www.m7mt.com/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
@@ -79,3 +79,7 @@ for non-loopback interfaces, and host uptime. The control plane stores one
 rolling sample per server per minute and combines it with the existing online
 user ledger. Metrics use the established outbound mTLS WebSocket and do not
 open a monitoring port on the server.
+
+Starting with `v0.1.19`, traffic batches preserve the real collection window
+instead of measuring the local SQLite write duration. This keeps per-user and
+server-wide realtime bandwidth aligned with the one-second Xray counter sample.

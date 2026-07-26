@@ -28,22 +28,23 @@ import (
 )
 
 type Client struct {
-	cfg             config.Config
-	identity        *identity.Identity
-	cert            tls.Certificate
-	signingKey      ed25519.PublicKey
-	store           *state.Store
-	secrets         *secretstore.Store
-	runtime         agentruntime.Runtime
-	logger          *slog.Logger
-	bootID          string
-	now             func() time.Time
-	rootCAs         *x509.CertPool
-	maintenance     *maintenance.Controller
-	maintenanceMu   sync.Mutex
-	runtimeSyncMu   sync.RWMutex
-	lastUpdateCheck time.Time
-	hostMetrics     hostMetricsSampler
+	cfg                    config.Config
+	identity               *identity.Identity
+	cert                   tls.Certificate
+	signingKey             ed25519.PublicKey
+	store                  *state.Store
+	secrets                *secretstore.Store
+	runtime                agentruntime.Runtime
+	logger                 *slog.Logger
+	bootID                 string
+	now                    func() time.Time
+	rootCAs                *x509.CertPool
+	maintenance            *maintenance.Controller
+	maintenanceMu          sync.Mutex
+	runtimeSyncMu          sync.RWMutex
+	lastUpdateCheck        time.Time
+	hostMetrics            hostMetricsSampler
+	trafficWindowStartedAt time.Time
 }
 
 type hostMetricsSampler interface {
@@ -488,9 +489,15 @@ func (c *Client) collectAndSendTraffic(ctx context.Context, writer *sessionWrite
 	if err != nil {
 		return err
 	}
-	if err := c.store.AddTraffic(ctx, deltas); err != nil {
+	intervalEndedAt := c.now().UTC()
+	intervalStartedAt := c.trafficWindowStartedAt
+	if intervalStartedAt.IsZero() || !intervalEndedAt.After(intervalStartedAt) {
+		intervalStartedAt = intervalEndedAt.Add(-c.cfg.TrafficInterval)
+	}
+	if err := c.store.AddTrafficWindow(ctx, deltas, intervalStartedAt, intervalEndedAt); err != nil {
 		return err
 	}
+	c.trafficWindowStartedAt = intervalEndedAt
 	runtimeState, err := c.store.RuntimeState(ctx)
 	if err != nil {
 		return err

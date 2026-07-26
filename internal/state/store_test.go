@@ -66,11 +66,13 @@ func TestTrafficWALSurvivesRestartAndRequiresExactAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.now = func() time.Time { return time.Unix(1700000060, 0).UTC() }
-	if err := store.AddTraffic(ctx, []TrafficDelta{{
+	windowStart := time.Unix(1700000059, 0).UTC()
+	windowEnd := time.Unix(1700000060, 0).UTC()
+	store.now = func() time.Time { return windowEnd.Add(time.Second) }
+	if err := store.AddTrafficWindow(ctx, []TrafficDelta{{
 		SubscriberID: 901, InboundID: 81, QuotaGeneration: 8,
 		UploadBytes: 1024, DownloadBytes: 8192,
-	}}); err != nil {
+	}}, windowStart, windowEnd); err != nil {
 		t.Fatal(err)
 	}
 	batch, err := store.DrainTraffic(ctx, "82c49a6b-5bd3-4d75-97ca-058d777b3599", 17)
@@ -79,6 +81,9 @@ func TestTrafficWALSurvivesRestartAndRequiresExactAck(t *testing.T) {
 	}
 	if batch == nil || batch.Sequence != 1 || len(batch.Items) != 1 {
 		t.Fatalf("batch = %#v", batch)
+	}
+	if !batch.IntervalStartedAt.Equal(windowStart) || !batch.IntervalEndedAt.Equal(windowEnd) {
+		t.Fatalf("traffic window = %s..%s, want %s..%s", batch.IntervalStartedAt, batch.IntervalEndedAt, windowStart, windowEnd)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -104,5 +109,49 @@ func TestTrafficWALSurvivesRestartAndRequiresExactAck(t *testing.T) {
 	}
 	if err := store.AcknowledgeTraffic(ctx, batch.BootID, batch.Sequence, batch.PayloadSHA256); err == nil {
 		t.Fatal("duplicate ACK unexpectedly deleted a row")
+	}
+}
+
+func TestTrafficAccumulatorPreservesFullCollectionWindow(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	firstStart := time.Unix(1700000000, 0).UTC()
+	firstEnd := firstStart.Add(time.Second)
+	secondEnd := firstEnd.Add(time.Second)
+	delta := TrafficDelta{SubscriberID: 901, InboundID: 81, QuotaGeneration: 8, UploadBytes: 100, DownloadBytes: 200}
+	if err := store.AddTrafficWindow(ctx, []TrafficDelta{delta}, firstStart, firstEnd); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddTrafficWindow(ctx, []TrafficDelta{delta}, firstEnd, secondEnd); err != nil {
+		t.Fatal(err)
+	}
+	batch, err := store.DrainTraffic(ctx, "82c49a6b-5bd3-4d75-97ca-058d777b3599", 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch == nil || len(batch.Items) != 1 || batch.Items[0].UploadBytes != 200 || batch.Items[0].DownloadBytes != 400 {
+		t.Fatalf("batch = %#v", batch)
+	}
+	if !batch.IntervalStartedAt.Equal(firstStart) || !batch.IntervalEndedAt.Equal(secondEnd) {
+		t.Fatalf("traffic window = %s..%s, want %s..%s", batch.IntervalStartedAt, batch.IntervalEndedAt, firstStart, secondEnd)
+	}
+}
+
+func TestAddTrafficWindowRejectsInvalidWindow(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Unix(1700000000, 0).UTC()
+	if err := store.AddTrafficWindow(ctx, nil, now, now); err == nil {
+		t.Fatal("invalid traffic window was accepted")
 	}
 }
