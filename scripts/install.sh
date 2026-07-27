@@ -123,6 +123,38 @@ verify_asset() {
 verify_asset "$(basename "$service_source")"
 verify_asset "$(basename "$maintenance_service_source")"
 
+systemd_cap_sys_admin_available() {
+  [ -r /proc/1/status ] || return 0
+  cap_bnd="$(awk '$1 == "CapBnd:" { print $2; exit }' /proc/1/status)"
+  [ -n "$cap_bnd" ] || return 0
+  case "$cap_bnd" in
+    *[!0-9a-fA-F]*) return 0 ;;
+    *[2367aAbBeEfF]?????) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+apply_systemd_container_compat_unit() {
+  compat_source=$1
+  compat_output="${compat_source}.container-compat"
+  awk '
+    NR == 1 { print "# IEPL_SYSTEMD_CONTAINER_COMPAT=cap_sys_admin_absent" }
+    /^(PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ProtectKernelTunables|ProtectKernelModules|ProtectKernelLogs|ProtectControlGroups|ProtectClock|ProtectHostname|RestrictSUIDSGID|RestrictRealtime|LockPersonality|ReadWritePaths)=/ { next }
+    { print }
+  ' "$compat_source" > "$compat_output"
+  [ -s "$compat_output" ] || {
+    echo "failed to build restricted-container systemd unit" >&2
+    exit 1
+  }
+  mv -f "$compat_output" "$compat_source"
+}
+
+if [ "$service_mode" = "systemd" ] && ! systemd_cap_sys_admin_available; then
+  echo "systemd restricted-container mode enabled (CAP_SYS_ADMIN is absent)."
+  apply_systemd_container_compat_unit "$service_source"
+  apply_systemd_container_compat_unit "$maintenance_service_source"
+fi
+
 if ! id iepl-agent >/dev/null 2>&1; then
   if [ "$is_alpine" -eq 1 ]; then
     addgroup -S iepl-agent 2>/dev/null || true

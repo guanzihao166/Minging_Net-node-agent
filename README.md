@@ -32,7 +32,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.22 \
+sh install.sh --version v0.1.23 \
   --enroll-url https://www.m7mt.com/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
@@ -49,7 +49,10 @@ On Alpine, the installer creates an OpenRC service and enables it with
 `rc-update add iepl-agent default`. On systemd hosts it installs and enables
 `iepl-agent.service` as before. Upgrades preserve the prior binary and service
 unit and restore them automatically when enrollment, service reload, restart,
-or the post-restart health check fails.
+or the post-restart health check fails. If PID 1 does not have `CAP_SYS_ADMIN`,
+the installer automatically removes only the namespace and execution filters
+that a restricted container cannot apply. The Agent still runs as the
+`iepl-agent` user with its capability boundary and managed runtime directories.
 
 ## Signed maintenance
 
