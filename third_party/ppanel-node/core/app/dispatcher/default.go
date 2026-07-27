@@ -109,6 +109,7 @@ type DefaultDispatcher struct {
 	Counter        sync.Map
 	LinkManagers   sync.Map // map[string]*LinkManager
 	LimiterManager *limiter.Manager
+	AccessRecorder *AccessRecorder
 }
 
 func init() {
@@ -132,6 +133,7 @@ func (d *DefaultDispatcher) Init(config *Config, om outbound.Manager, router rou
 	d.router = router
 	d.policy = pm
 	d.stats = sm
+	d.AccessRecorder = NewAccessRecorder()
 	return nil
 }
 
@@ -148,7 +150,7 @@ func (*DefaultDispatcher) Start() error {
 // Close implements common.Closable.
 func (*DefaultDispatcher) Close() error { return nil }
 
-func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*transport.Link, *transport.Link, *limiter.Limiter, error) {
+func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destination) (*transport.Link, *transport.Link, *limiter.Limiter, *AccessSession, error) {
 	opt := pipe.OptionsFromContext(ctx)
 	uplinkReader, uplinkWriter := pipe.New(opt...)
 	downlinkReader, downlinkWriter := pipe.New(opt...)
@@ -179,7 +181,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			common.Close(inboundLink.Writer)
 			common.Interrupt(outboundLink.Reader)
 			common.Interrupt(inboundLink.Reader)
-			return nil, nil, nil, errors.New("get limiter ", sessionInbound.Tag, " error: ", err)
+			return nil, nil, nil, nil, errors.New("get limiter ", sessionInbound.Tag, " error: ", err)
 		}
 		// Speed Limit and Device Limit
 		_, reject := limit.CheckLimit(user.Email,
@@ -191,7 +193,12 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			common.Close(inboundLink.Writer)
 			common.Interrupt(outboundLink.Reader)
 			common.Interrupt(inboundLink.Reader)
-			return nil, nil, nil, errors.New("Limited ", user.Email, " by conn or ip")
+			return nil, nil, nil, nil, errors.New("Limited ", user.Email, " by conn or ip")
+		}
+		var accessSession *AccessSession
+		if d.AccessRecorder != nil {
+			accessSession = d.AccessRecorder.Start(user.Email, sessionInbound.Tag,
+				destination.Address.String(), accessNetworkName(uint32(destination.Network)), uint16(destination.Port))
 		}
 		var lm *LinkManager
 		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
@@ -205,6 +212,9 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 		managedWriter := &ManagedWriter{
 			writer:  uplinkWriter,
 			manager: lm,
+		}
+		if accessSession != nil {
+			managedWriter.onClose = accessSession.Close
 		}
 		lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Source.Address.IP().String())
 		inboundLink.Writer = managedWriter
@@ -236,9 +246,14 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			Counter: downcounter,
 			Writer:  outboundLink.Writer,
 		}
+		if accessSession != nil {
+			inboundLink.Writer = &accessWriter{writer: inboundLink.Writer, add: accessSession.AddUpload}
+			outboundLink.Writer = &accessWriter{writer: outboundLink.Writer, add: accessSession.AddDownload}
+		}
+		return inboundLink, outboundLink, limit, accessSession, nil
 	}
 
-	return inboundLink, outboundLink, limit, nil
+	return inboundLink, outboundLink, limit, nil, nil
 }
 
 func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResult, request session.SniffingRequest, destination net.Destination) bool {
@@ -294,11 +309,14 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 		ctx = session.ContextWithContent(ctx, content)
 	}
 	sniffingRequest := content.SniffingRequest
-	inbound, outbound, l, err := d.getLink(ctx, destination.Network)
+	inbound, outbound, l, accessSession, err := d.getLink(ctx, destination)
 	if err != nil {
 		return nil, err
 	}
 	if !sniffingRequest.Enabled {
+		if accessSession != nil {
+			accessSession.UpdateTarget(destination.Address.String(), "unknown")
+		}
 		go d.routedDispatch(ctx, outbound, destination, l, "")
 	} else {
 		go func() {
@@ -309,6 +327,9 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 			result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
 			if err == nil {
 				content.Protocol = result.Protocol()
+				if accessSession != nil && result.Domain() != "" {
+					accessSession.UpdateTarget(result.Domain(), content.Protocol)
+				}
 			}
 			if err == nil && d.shouldOverride(ctx, result, sniffingRequest, destination) {
 				domain := result.Domain()
@@ -327,6 +348,9 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 				} else {
 					ob.Target = destination
 				}
+			}
+			if accessSession != nil {
+				accessSession.UpdateTarget(destination.Address.String(), content.Protocol)
 			}
 			d.routedDispatch(ctx, outbound, destination, l, content.Protocol)
 		}()
@@ -379,6 +403,11 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			common.Interrupt(outbound.Reader)
 			return errors.New("Limited ", user.Email, " by conn or ip")
 		}
+		var accessSession *AccessSession
+		if d.AccessRecorder != nil {
+			accessSession = d.AccessRecorder.Start(user.Email, sessionInbound.Tag,
+				destination.Address.String(), accessNetworkName(uint32(destination.Network)), uint16(destination.Port))
+		}
 		var lm *LinkManager
 		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
 			lm = &LinkManager{
@@ -391,6 +420,9 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		managedWriter := &ManagedWriter{
 			writer:  outbound.Writer,
 			manager: lm,
+		}
+		if accessSession != nil {
+			managedWriter.onClose = accessSession.Close
 		}
 		lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Source.Address.IP().String())
 		outbound.Writer = managedWriter
@@ -416,11 +448,24 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		outbound.Reader = &CounterReader{
 			Reader:  &buf.TimeoutWrapperReader{Reader: outbound.Reader},
 			Counter: &ts.UpCounter,
+			Observe: func(bytes uint64) {
+				if accessSession != nil {
+					accessSession.AddUpload(bytes)
+				}
+			},
 		}
 		outbound.Writer = &dispatcher.SizeStatWriter{
 			Counter: downcounter,
 			Writer:  outbound.Writer,
 		}
+		if accessSession != nil {
+			outbound.Writer = &accessWriter{writer: outbound.Writer, add: accessSession.AddDownload}
+		}
+		defer func() {
+			if accessSession != nil {
+				accessSession.UpdateTarget(destination.Address.String(), content.Protocol)
+			}
+		}()
 	}
 
 	sniffingRequest := content.SniffingRequest

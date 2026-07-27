@@ -144,6 +144,20 @@ func (vc *XrayCore) GetOnlineDevices(tag string) []panel.OnlineUser {
 	return devices
 }
 
+func (vc *XrayCore) GetUserAccessSlice() []dispatcher.AccessSample {
+	if vc == nil {
+		return nil
+	}
+	vc.access.Lock()
+	defer vc.access.Unlock()
+	out := append([]dispatcher.AccessSample(nil), vc.closedAccess...)
+	vc.closedAccess = nil
+	if vc.dispatcher != nil && vc.dispatcher.AccessRecorder != nil {
+		out = append(out, vc.dispatcher.AccessRecorder.Drain()...)
+	}
+	return out
+}
+
 func (v *XrayCore) AddUsers(p *AddUsersParams) (added int, err error) {
 	v.users.mapLock.Lock()
 	defer v.users.mapLock.Unlock()

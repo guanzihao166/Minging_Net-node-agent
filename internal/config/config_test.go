@@ -16,6 +16,15 @@ func TestParseRunUsesRealtimeReportingIntervals(t *testing.T) {
 	if cfg.HeartbeatInterval != 5*time.Second {
 		t.Fatalf("HeartbeatInterval = %s, want 5s", cfg.HeartbeatInterval)
 	}
+	if cfg.AccessInterval != time.Minute {
+		t.Fatalf("AccessInterval = %s, want 1m", cfg.AccessInterval)
+	}
+}
+
+func TestParseRunRejectsTooFrequentAccessWrites(t *testing.T) {
+	if _, err := Parse([]string{"run", "--access-interval=9s"}, "test"); err == nil {
+		t.Fatal("Parse accepted an access interval below 10 seconds")
+	}
 }
 
 func TestParseRunRejectsSubsecondTrafficInterval(t *testing.T) {

@@ -16,6 +16,8 @@ type Runtime interface {
 	ApplyConfig(context.Context, agentprotocol.DesiredConfig) error
 	ApplyUsers(context.Context, []agentprotocol.UserCredential) error
 	CollectTraffic(context.Context) ([]state.TrafficDelta, error)
+	CollectAccess(context.Context) ([]agentprotocol.AccessItem, error)
+	RequeueAccess([]agentprotocol.AccessItem)
 	CollectOnline(context.Context) ([]agentprotocol.OnlineUser, error)
 	Status(context.Context) Status
 	Close() error

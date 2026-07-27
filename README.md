@@ -32,7 +32,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.21 \
+sh install.sh --version v0.1.22 \
   --enroll-url https://www.m7mt.com/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
@@ -92,3 +92,7 @@ Starting with `v0.1.21`, the first acknowledged heartbeat resets reconnect
 backoff to one second. A node with an intermittent transport no longer remains
 offline for the prior 60-second maximum after every healthy session, while
 pre-health failures still retain exponential backoff.
+
+Starting with `v0.1.22`, the Agent aggregates per-user domain connection
+sessions in memory, checkpoints them to a bounded local WAL, and reports
+connect/disconnect time, duration, and transfer totals to the control plane.

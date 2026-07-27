@@ -176,8 +176,34 @@ CREATE TABLE IF NOT EXISTS traffic_wal (
   PRIMARY KEY (boot_id, sequence)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS traffic_wal_payload ON traffic_wal(boot_id, sequence, payload_sha256);
+CREATE TABLE IF NOT EXISTS access_accumulator (
+  session_key TEXT PRIMARY KEY,
+  subscriber_id INTEGER NOT NULL,
+  inbound_id INTEGER NOT NULL,
+  host TEXT NOT NULL,
+  network TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  destination_port INTEGER NOT NULL,
+  started_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  ended_at TEXT,
+  upload_bytes INTEGER NOT NULL,
+  download_bytes INTEGER NOT NULL,
+  connection_count INTEGER NOT NULL,
+  is_active INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS access_wal (
+  boot_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  payload_json BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (boot_id, sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS access_wal_payload ON access_wal(boot_id, sequence, payload_sha256);
 INSERT INTO meta(key, value) VALUES ('schema_version', '1') ON CONFLICT(key) DO NOTHING;
 INSERT INTO meta(key, value) VALUES ('traffic_sequence', '0') ON CONFLICT(key) DO NOTHING;
+INSERT INTO meta(key, value) VALUES ('access_sequence', '0') ON CONFLICT(key) DO NOTHING;
 INSERT INTO meta(key, value) VALUES ('applied_config_version', '0') ON CONFLICT(key) DO NOTHING;
 INSERT INTO meta(key, value) VALUES ('applied_config_hash', '') ON CONFLICT(key) DO NOTHING;
 INSERT INTO meta(key, value) VALUES ('applied_user_revision', '0') ON CONFLICT(key) DO NOTHING;

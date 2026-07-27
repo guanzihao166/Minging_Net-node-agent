@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/ppanel-node/api/panel"
 	"github.com/perfect-panel/ppanel-node/conf"
 	ppcore "github.com/perfect-panel/ppanel-node/core"
+	"github.com/perfect-panel/ppanel-node/core/app/dispatcher"
 	inboundbuilder "github.com/perfect-panel/ppanel-node/core/inbound"
 
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
@@ -26,11 +27,12 @@ import (
 const embeddedXrayVersion = "wyx2685-xray-20260414"
 
 type XrayRuntime struct {
-	mu      sync.Mutex
-	secrets *secretstore.Store
-	active  *ppcore.XrayCore
-	config  *agentprotocol.DesiredConfig
-	users   []agentprotocol.UserCredential
+	mu            sync.Mutex
+	secrets       *secretstore.Store
+	active        *ppcore.XrayCore
+	config        *agentprotocol.DesiredConfig
+	users         []agentprotocol.UserCredential
+	pendingAccess []agentprotocol.AccessItem
 }
 
 func NewXray(secrets *secretstore.Store) (*XrayRuntime, error) {
@@ -59,8 +61,11 @@ func (r *XrayRuntime) ApplyConfig(_ context.Context, desired agentprotocol.Desir
 	previousUsers := append([]agentprotocol.UserCredential(nil), r.users...)
 	candidateUsers := usersAvailableInConfig(desired, r.users)
 	if r.active != nil {
-		if err := r.active.Close(); err != nil {
-			return err
+		previous := r.active
+		closeErr := previous.Close()
+		r.pendingAccess = append(r.pendingAccess, accessSamplesToItems(previous.GetUserAccessSlice())...)
+		if closeErr != nil {
+			return closeErr
 		}
 		r.active = nil
 	}
@@ -181,6 +186,29 @@ func (r *XrayRuntime) CollectTraffic(_ context.Context) ([]state.TrafficDelta, e
 	return deltas, nil
 }
 
+func (r *XrayRuntime) CollectAccess(_ context.Context) ([]agentprotocol.AccessItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := append([]agentprotocol.AccessItem(nil), r.pendingAccess...)
+	r.pendingAccess = nil
+	if r.active != nil {
+		items = append(items, accessSamplesToItems(r.active.GetUserAccessSlice())...)
+	}
+	return items, nil
+}
+
+func (r *XrayRuntime) RequeueAccess(items []agentprotocol.AccessItem) {
+	if r == nil || len(items) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.pendingAccess)+len(items) > 20000 {
+		items = items[len(items)-(20000-len(r.pendingAccess)):]
+	}
+	r.pendingAccess = append(r.pendingAccess, items...)
+}
+
 func (r *XrayRuntime) CollectOnline(_ context.Context) ([]agentprotocol.OnlineUser, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -218,9 +246,30 @@ func (r *XrayRuntime) Close() error {
 	if r.active == nil {
 		return nil
 	}
-	err := r.active.Close()
+	active := r.active
+	err := active.Close()
+	r.pendingAccess = append(r.pendingAccess, accessSamplesToItems(active.GetUserAccessSlice())...)
 	r.active = nil
 	return err
+}
+
+func accessSamplesToItems(samples []dispatcher.AccessSample) []agentprotocol.AccessItem {
+	items := make([]agentprotocol.AccessItem, 0, len(samples))
+	for _, sample := range samples {
+		item := agentprotocol.AccessItem{
+			SessionKey: sample.SessionKey, SubscriberID: sample.SubscriberID, InboundID: sample.InboundID,
+			Host: sample.Host, Network: sample.Network, Protocol: sample.Protocol,
+			DestinationPort: sample.DestinationPort, StartedAt: sample.StartedAt, LastSeenAt: sample.LastSeenAt,
+			UploadBytes: sample.UploadBytes, DownloadBytes: sample.DownloadBytes,
+			ConnectionCount: sample.ConnectionCount, Active: sample.Active,
+		}
+		if sample.EndedAt != nil {
+			endedAt := *sample.EndedAt
+			item.EndedAt = &endedAt
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 type runtimeNode struct {

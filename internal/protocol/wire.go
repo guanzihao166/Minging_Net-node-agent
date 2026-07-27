@@ -25,6 +25,8 @@ const (
 	TypeUserResult     = "user_result"
 	TypeTrafficBatch   = "traffic_batch"
 	TypeTrafficAck     = "traffic_ack"
+	TypeAccessBatch    = "access_batch"
+	TypeAccessAck      = "access_ack"
 	TypeOnlineSnapshot = "online_snapshot"
 	TypeError          = "error"
 )
@@ -148,6 +150,55 @@ func TrafficPayloadSHA256(batch TrafficBatch) (string, error) {
 			return left.InboundID < right.InboundID
 		}
 		return left.QuotaGeneration < right.QuotaGeneration
+	})
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+type AccessItem struct {
+	SessionKey      string     `json:"session_key"`
+	SubscriberID    int64      `json:"subscriber_id"`
+	InboundID       int64      `json:"inbound_id"`
+	Host            string     `json:"host"`
+	Network         string     `json:"network"`
+	Protocol        string     `json:"protocol"`
+	DestinationPort uint16     `json:"destination_port"`
+	StartedAt       time.Time  `json:"started_at"`
+	LastSeenAt      time.Time  `json:"last_seen_at"`
+	EndedAt         *time.Time `json:"ended_at,omitempty"`
+	UploadBytes     uint64     `json:"upload_bytes"`
+	DownloadBytes   uint64     `json:"download_bytes"`
+	ConnectionCount uint32     `json:"connection_count"`
+	Active          bool       `json:"active"`
+}
+
+type AccessBatch struct {
+	BootID            string       `json:"boot_id"`
+	Sequence          uint64       `json:"sequence"`
+	ConfigVersion     uint64       `json:"config_version"`
+	IntervalStartedAt time.Time    `json:"interval_started_at"`
+	IntervalEndedAt   time.Time    `json:"interval_ended_at"`
+	PayloadSHA256     string       `json:"payload_sha256"`
+	Items             []AccessItem `json:"items"`
+}
+
+type AccessAck struct {
+	BootID        string `json:"boot_id"`
+	Sequence      uint64 `json:"sequence"`
+	PayloadSHA256 string `json:"payload_sha256"`
+	Status        string `json:"status"`
+}
+
+func AccessPayloadSHA256(batch AccessBatch) (string, error) {
+	canonical := batch
+	canonical.PayloadSHA256 = ""
+	canonical.Items = append([]AccessItem(nil), batch.Items...)
+	sort.Slice(canonical.Items, func(i, j int) bool {
+		return canonical.Items[i].SessionKey < canonical.Items[j].SessionKey
 	})
 	raw, err := json.Marshal(canonical)
 	if err != nil {

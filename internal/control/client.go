@@ -62,6 +62,9 @@ func New(cfg config.Config, id *identity.Identity, certificate tls.Certificate, 
 	if cfg.UpdateCheckInterval < time.Minute {
 		cfg.UpdateCheckInterval = time.Hour
 	}
+	if cfg.AccessInterval <= 0 {
+		cfg.AccessInterval = time.Minute
+	}
 	maintenanceController, err := maintenance.NewController(cfg, id, signingKey, cfg.Version)
 	if err != nil {
 		return nil, err
@@ -182,6 +185,9 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 	if err := c.sendPendingTraffic(ctx, writer); err != nil {
 		return err
 	}
+	if err := c.sendPendingAccess(ctx, writer); err != nil {
+		c.logger.Warn("send pending access WAL", "error", err)
+	}
 
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -232,6 +238,21 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 			}
 			if err := c.store.AcknowledgeTraffic(sessionCtx, ack.BootID, ack.Sequence, ack.PayloadSHA256); err != nil {
 				return err
+			}
+		case agentprotocol.TypeAccessAck:
+			var ack agentprotocol.AccessAck
+			if err := agentprotocol.DecodePayload(envelope, &ack); err != nil {
+				return err
+			}
+			switch ack.Status {
+			case "accepted", "already_accepted", "discarded", "already_discarded", "partially_applied", "already_partially_applied":
+				if err := c.store.AcknowledgeAccess(sessionCtx, ack.BootID, ack.Sequence, ack.PayloadSHA256); err != nil {
+					return err
+				}
+			case "retry_later":
+				c.logger.Warn("control server deferred access WAL", "sequence", ack.Sequence)
+			default:
+				return errors.New("control server returned an invalid access acknowledgement")
 			}
 		case agentprotocol.TypeHeartbeatAck:
 			if !established {
@@ -328,8 +349,10 @@ func (c *Client) runMaintenance(ctx context.Context, writer *sessionWriter, errC
 func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWriter, sessionID string, errCh chan<- error) {
 	heartbeatTicker := time.NewTicker(c.cfg.HeartbeatInterval)
 	trafficTicker := time.NewTicker(c.cfg.TrafficInterval)
+	accessTicker := time.NewTicker(c.cfg.AccessInterval)
 	defer heartbeatTicker.Stop()
 	defer trafficTicker.Stop()
+	defer accessTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -345,6 +368,13 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				sendSessionError(errCh, err)
 				return
 			}
+			accessBatches, accessBytes, err := c.store.PendingAccessStats(ctx)
+			if err != nil {
+				sendSessionError(errCh, err)
+				return
+			}
+			pendingBatches += accessBatches
+			pendingBytes += accessBytes
 			runtimeStatus := c.runtime.Status(ctx)
 			var systemMetrics *agentprotocol.SystemMetrics
 			if c.hostMetrics != nil {
@@ -382,6 +412,10 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 			if err := c.collectAndSendOnline(ctx, writer); err != nil {
 				sendSessionError(errCh, err)
 				return
+			}
+		case <-accessTicker.C:
+			if err := c.collectAndSendAccess(ctx, writer); err != nil {
+				c.logger.Warn("collect or send access WAL", "error", err)
 			}
 		}
 	}
@@ -541,6 +575,42 @@ func (c *Client) sendPendingTraffic(ctx context.Context, writer *sessionWriter) 
 	}
 	for _, batch := range pending {
 		if err := writer.send(agentprotocol.TypeTrafficBatch, batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) collectAndSendAccess(ctx context.Context, writer *sessionWriter) error {
+	c.runtimeSyncMu.RLock()
+	items, err := c.runtime.CollectAccess(ctx)
+	c.runtimeSyncMu.RUnlock()
+	if err != nil {
+		return err
+	}
+	if len(items) > 0 {
+		if err := c.store.AddAccess(ctx, items); err != nil {
+			c.runtime.RequeueAccess(items)
+			return err
+		}
+	}
+	runtimeState, err := c.store.RuntimeState(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := c.store.DrainAccess(ctx, c.bootID, runtimeState.AppliedConfigVersion); err != nil {
+		return err
+	}
+	return c.sendPendingAccess(ctx, writer)
+}
+
+func (c *Client) sendPendingAccess(ctx context.Context, writer *sessionWriter) error {
+	pending, err := c.store.PendingAccess(ctx, 100)
+	if err != nil {
+		return err
+	}
+	for _, batch := range pending {
+		if err := writer.send(agentprotocol.TypeAccessBatch, batch); err != nil {
 			return err
 		}
 	}

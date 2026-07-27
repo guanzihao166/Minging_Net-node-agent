@@ -337,6 +337,12 @@ func (f *fakeRuntime) CollectTraffic(context.Context) ([]state.TrafficDelta, err
 	return []state.TrafficDelta{{SubscriberID: 901, InboundID: 81, UploadBytes: 100}}, nil
 }
 
+func (f *fakeRuntime) CollectAccess(context.Context) ([]agentprotocol.AccessItem, error) {
+	return nil, nil
+}
+
+func (f *fakeRuntime) RequeueAccess([]agentprotocol.AccessItem) {}
+
 func (f *fakeRuntime) Status(context.Context) agentruntime.Status {
 	return agentruntime.Status{Running: true, Version: "test"}
 }

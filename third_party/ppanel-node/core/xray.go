@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +43,7 @@ type XrayCore struct {
 	ihm                         inbound.Manager
 	ohm                         outbound.Manager
 	dispatcher                  *dispatcher.DefaultDispatcher
+	closedAccess                []dispatcher.AccessSample
 }
 
 type UserMap struct {
@@ -71,6 +74,13 @@ func (v *XrayCore) Start(serverconfig *panel.ServerConfigResponse) error {
 	v.ohm = v.Server.GetFeature(outbound.ManagerType()).(outbound.Manager)
 	v.dispatcher = v.Server.GetFeature(routing.DispatcherType()).(*dispatcher.DefaultDispatcher)
 	v.dispatcher.LimiterManager = v.LimiterManager
+	v.dispatcher.AccessRecorder.SetIdentityResolver(func(userKey, inboundTag string) (int64, int64, bool) {
+		v.users.mapLock.RLock()
+		uid, ok := v.users.uidMap[userKey]
+		v.users.mapLock.RUnlock()
+		inboundID, err := strconv.ParseInt(strings.TrimPrefix(inboundTag, "inbound-"), 10, 64)
+		return int64(uid), inboundID, ok && uid > 0 && err == nil && inboundID > 0
+	})
 	v.startTasks(serverconfig)
 	return nil
 }
@@ -86,20 +96,21 @@ func (v *XrayCore) Close() error {
 		v.serverConfigMonitorPeriodic = nil
 	}
 	server := v.Server
+	dispatcherValue := v.dispatcher
+	if server == nil {
+		return nil
+	}
+	err := server.Close()
+	if dispatcherValue != nil && dispatcherValue.AccessRecorder != nil {
+		v.closedAccess = append(v.closedAccess, dispatcherValue.AccessRecorder.Close()...)
+	}
 	v.Config = nil
 	v.ihm = nil
 	v.ohm = nil
 	v.dispatcher = nil
 	v.LimiterManager = nil
 	v.Server = nil
-	if server == nil {
-		return nil
-	}
-	err := server.Close()
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Instance {
@@ -127,10 +138,10 @@ func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Insta
 		// connections (interactive SSH, database sessions, MQTT/WebSocket, etc.).
 		// Restore it to 120 — the value used by upstream wyx2685/v2node, which
 		// this project is modified from.
-		ConnectionIdle:    proto.Uint32(120),
-		UplinkOnly:        proto.Uint32(2),
-		DownlinkOnly:      proto.Uint32(4),
-		BufferSize:        proto.Int32(64),
+		ConnectionIdle: proto.Uint32(120),
+		UplinkOnly:     proto.Uint32(2),
+		DownlinkOnly:   proto.Uint32(4),
+		BufferSize:     proto.Int32(64),
 	}
 	corePolicyConfig := &coreConf.PolicyConfig{}
 	corePolicyConfig.Levels = map[uint32]*coreConf.Policy{0: levelPolicyConfig}
