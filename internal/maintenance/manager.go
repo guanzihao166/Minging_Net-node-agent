@@ -27,9 +27,22 @@ import (
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 )
 
-const releaseDownloadBase = "https://github.com/guanzihao166/iepl-node-agent/releases/download"
+const (
+	releaseDownloadBase        = "https://github.com/guanzihao166/iepl-node-agent/releases/download"
+	releaseDownloadAttempts    = 3
+	releaseDownloadRetryDelay  = 2 * time.Second
+	agentServiceStartupTimeout = 60 * time.Second
+)
 
 var errManagerUninstalled = errors.New("agent uninstalled")
+
+type releaseDownloadHTTPError struct {
+	statusCode int
+}
+
+func (e releaseDownloadHTTPError) Error() string {
+	return fmt.Sprintf("release download returned HTTP %d", e.statusCode)
+}
 
 type Manager struct {
 	cfg        config.Config
@@ -39,6 +52,7 @@ type Manager struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	client     *http.Client
+	retryDelay func(int) time.Duration
 }
 
 func NewManager(cfg config.Config, id *identity.Identity, signingKey ed25519.PublicKey, version string, logger *slog.Logger) (*Manager, error) {
@@ -52,6 +66,9 @@ func NewManager(cfg config.Config, id *identity.Identity, signingKey ed25519.Pub
 		cfg: cfg, identity: id, signingKey: append(ed25519.PublicKey(nil), signingKey...),
 		version: strings.TrimSpace(version), logger: logger, now: time.Now,
 		client: &http.Client{Timeout: 2 * time.Minute},
+		retryDelay: func(attempt int) time.Duration {
+			return time.Duration(attempt) * releaseDownloadRetryDelay
+		},
 	}, nil
 }
 
@@ -301,6 +318,24 @@ func (m *Manager) installRelease(ctx context.Context, targetVersion string) erro
 }
 
 func (m *Manager) download(ctx context.Context, source string, limit int64) ([]byte, error) {
+	var lastErr error
+	for attempt := 1; attempt <= releaseDownloadAttempts; attempt++ {
+		raw, err := m.downloadOnce(ctx, source, limit)
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+		if !shouldRetryReleaseRequest(ctx, err) || attempt == releaseDownloadAttempts {
+			break
+		}
+		if err := waitForReleaseRetry(ctx, releaseRetryDelayFor(attempt, m.retryDelay)); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (m *Manager) downloadOnce(ctx context.Context, source string, limit int64) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
 	if err != nil {
 		return nil, err
@@ -312,7 +347,7 @@ func (m *Manager) download(ctx context.Context, source string, limit int64) ([]b
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("release download returned HTTP %d", response.StatusCode)
+		return nil, releaseDownloadHTTPError{statusCode: response.StatusCode}
 	}
 	if response.ContentLength > limit {
 		return nil, errors.New("release asset exceeds size limit")
@@ -331,6 +366,30 @@ func (m *Manager) downloadToFile(ctx context.Context, source string, destination
 	if destination == nil || limit <= 0 {
 		return "", errors.New("release download destination is invalid")
 	}
+	var lastErr error
+	for attempt := 1; attempt <= releaseDownloadAttempts; attempt++ {
+		if err := destination.Truncate(0); err != nil {
+			return "", err
+		}
+		if _, err := destination.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
+		digest, err := m.downloadToFileOnce(ctx, source, destination, limit)
+		if err == nil {
+			return digest, nil
+		}
+		lastErr = err
+		if !shouldRetryReleaseRequest(ctx, err) || attempt == releaseDownloadAttempts {
+			break
+		}
+		if err := waitForReleaseRetry(ctx, releaseRetryDelayFor(attempt, m.retryDelay)); err != nil {
+			return "", err
+		}
+	}
+	return "", lastErr
+}
+
+func (m *Manager) downloadToFileOnce(ctx context.Context, source string, destination *os.File, limit int64) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
 	if err != nil {
 		return "", err
@@ -342,7 +401,7 @@ func (m *Manager) downloadToFile(ctx context.Context, source string, destination
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("release download returned HTTP %d", response.StatusCode)
+		return "", releaseDownloadHTTPError{statusCode: response.StatusCode}
 	}
 	if response.ContentLength > limit {
 		return "", errors.New("release asset exceeds size limit")
@@ -356,6 +415,38 @@ func (m *Manager) downloadToFile(ctx context.Context, source string, destination
 		return "", errors.New("release asset exceeds size limit")
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func shouldRetryReleaseRequest(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var responseErr releaseDownloadHTTPError
+	if errors.As(err, &responseErr) {
+		return responseErr.statusCode == http.StatusRequestTimeout || responseErr.statusCode == http.StatusTooManyRequests || responseErr.statusCode >= http.StatusInternalServerError
+	}
+	return true
+}
+
+func releaseRetryDelayFor(attempt int, retryDelay func(int) time.Duration) time.Duration {
+	if retryDelay != nil {
+		return retryDelay(attempt)
+	}
+	return time.Duration(attempt) * releaseDownloadRetryDelay
+}
+
+func waitForReleaseRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func checksumForAsset(raw []byte, asset string) (string, error) {
@@ -378,7 +469,7 @@ func restartAgentService(ctx context.Context) error {
 }
 
 func waitAgentService(ctx context.Context, targetVersion string) error {
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(agentServiceStartupTimeout)
 	for time.Now().Before(deadline) {
 		versionCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		output, versionErr := exec.CommandContext(versionCtx, "/opt/iepl-agent/bin/iepl-agent", "version").CombinedOutput()

@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path"
@@ -32,6 +31,7 @@ type Controller struct {
 	now        func() time.Time
 	client     *http.Client
 	latestURL  string
+	retryDelay func(int) time.Duration
 }
 
 func NewController(cfg config.Config, id *identity.Identity, signingKey ed25519.PublicKey, version string) (*Controller, error) {
@@ -42,6 +42,9 @@ func NewController(cfg config.Config, id *identity.Identity, signingKey ed25519.
 		cfg: cfg, identity: id, signingKey: append(ed25519.PublicKey(nil), signingKey...),
 		version: strings.TrimSpace(version), now: time.Now,
 		client: &http.Client{Timeout: 20 * time.Second}, latestURL: latestReleaseURL,
+		retryDelay: func(attempt int) time.Duration {
+			return time.Duration(attempt) * releaseDownloadRetryDelay
+		},
 	}, nil
 }
 
@@ -150,6 +153,24 @@ func (c *Controller) ClearCompletedResult(commandID string) error {
 }
 
 func (c *Controller) latestVersion(ctx context.Context) (string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= releaseDownloadAttempts; attempt++ {
+		version, err := c.latestVersionOnce(ctx)
+		if err == nil {
+			return version, nil
+		}
+		lastErr = err
+		if !shouldRetryReleaseRequest(ctx, err) || attempt == releaseDownloadAttempts {
+			break
+		}
+		if err := waitForReleaseRetry(ctx, releaseRetryDelayFor(attempt, c.retryDelay)); err != nil {
+			return "", err
+		}
+	}
+	return "", lastErr
+}
+
+func (c *Controller) latestVersionOnce(ctx context.Context) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodHead, c.latestURL, nil)
 	if err != nil {
 		return "", err
@@ -162,7 +183,7 @@ func (c *Controller) latestVersion(ctx context.Context) (string, error) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub HTTP %d", response.StatusCode)
+		return "", releaseDownloadHTTPError{statusCode: response.StatusCode}
 	}
 	version := strings.TrimSpace(path.Base(response.Request.URL.Path))
 	if !strings.Contains(response.Request.URL.Path, "/releases/tag/") || !validReleaseVersion(version) {

@@ -86,6 +86,42 @@ func TestControllerChecksLatestReleaseAndQueuesOnlySignedFixedAction(t *testing.
 	}
 }
 
+func TestControllerRetriesTransientLatestReleaseFailure(t *testing.T) {
+	latestAttempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/releases/latest" {
+			latestAttempts++
+			if latestAttempts < 3 {
+				writer.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			http.Redirect(writer, request, "/releases/tag/v0.1.17", http.StatusFound)
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	controller, err := NewController(config.Config{StateDir: filepath.Join(root, "state"), MaintenanceDir: filepath.Join(root, "run"), MaintenanceStateDir: filepath.Join(root, "maintenance-state")}, &identity.Identity{AgentNodeID: 17, ConfigSigningKeyID: "test-key"}, publicKey, "v0.1.16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.client = server.Client()
+	controller.latestURL = server.URL + "/releases/latest"
+	controller.retryDelay = func(int) time.Duration { return 0 }
+	result := controller.CheckUpdate(context.Background(), uuid.NewString())
+	if result.Status != "checked" || result.LatestVersion != "v0.1.17" || !result.UpdateAvailable {
+		t.Fatalf("check result = %#v", result)
+	}
+	if latestAttempts != 3 {
+		t.Fatalf("latest release attempts = %d, want 3", latestAttempts)
+	}
+}
+
 func TestChecksumParserRequiresExactAsset(t *testing.T) {
 	digest := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	got, err := checksumForAsset([]byte(digest+"  iepl-agent-linux-amd64\n"), "iepl-agent-linux-amd64")
@@ -142,5 +178,56 @@ func TestReleaseBinaryDownloadRejectsStreamingSizeOverflow(t *testing.T) {
 	manager := &Manager{version: "v0.1.16", client: server.Client()}
 	if _, err := manager.downloadToFile(context.Background(), server.URL, destination, 5); err == nil {
 		t.Fatal("oversized streamed asset was accepted")
+	}
+}
+
+func TestReleaseDownloadsRetryTransientFailuresWithoutRetainingPartialFile(t *testing.T) {
+	payload := []byte("stable-release-binary")
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts < 3 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = writer.Write(payload)
+	}))
+	defer server.Close()
+	destination, err := os.Create(filepath.Join(t.TempDir(), "agent.new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	manager := &Manager{version: "v0.1.16", client: server.Client(), retryDelay: func(int) time.Duration { return 0 }}
+	digest, err := manager.downloadToFile(context.Background(), server.URL, destination, int64(len(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 {
+		t.Fatalf("download attempts = %d, want 3", attempts)
+	}
+	if _, err := destination.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := io.ReadAll(destination)
+	expected := sha256.Sum256(payload)
+	if err != nil || string(stored) != string(payload) || digest != hex.EncodeToString(expected[:]) {
+		t.Fatalf("stored=%q digest=%q error=%v", stored, digest, err)
+	}
+}
+
+func TestReleaseDownloadsDoNotRetryMissingRelease(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempts++
+		writer.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	manager := &Manager{version: "v0.1.16", client: server.Client(), retryDelay: func(int) time.Duration { return 0 }}
+	if _, err := manager.download(context.Background(), server.URL, 1024); err == nil {
+		t.Fatal("missing release must fail")
+	}
+	if attempts != 1 {
+		t.Fatalf("download attempts = %d, want 1", attempts)
 	}
 }
