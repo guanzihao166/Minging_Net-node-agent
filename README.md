@@ -32,7 +32,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.23 \
+sh install.sh --version v0.1.24 \
   --enroll-url https://www.m7mt.com/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```
