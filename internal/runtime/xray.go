@@ -305,6 +305,8 @@ func (r *XrayRuntime) panelNodeForInbound(desired agentprotocol.DesiredConfig, i
 		protocol.Type = "vless"
 		protocol.Flow = inbound.VLESS.Flow
 		protocol.Encryption = inbound.VLESS.Decryption
+	case agentprotocol.ProtocolVMess:
+		info.Type, protocol.Type = "vmess", "vmess"
 	case agentprotocol.ProtocolTrojan:
 		info.Type, protocol.Type = "trojan", "trojan"
 	case agentprotocol.ProtocolSS2022:
@@ -454,7 +456,7 @@ func panelUsersByInbound(desired agentprotocol.DesiredConfig, users []agentproto
 
 func validateRuntimeCredential(inbound agentprotocol.Inbound, value string) error {
 	switch inbound.Protocol {
-	case agentprotocol.ProtocolVLESS, agentprotocol.ProtocolTUIC:
+	case agentprotocol.ProtocolVLESS, agentprotocol.ProtocolVMess, agentprotocol.ProtocolTUIC:
 		if uuid.Validate(value) != nil {
 			return errors.New("credential must be a UUID")
 		}

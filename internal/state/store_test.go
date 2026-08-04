@@ -59,6 +59,39 @@ func TestConfigRevisionPersistsBeforeAppliedState(t *testing.T) {
 	}
 }
 
+func TestResetAppliedRuntimeRequestsFullResync(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := agentprotocol.SignConfig(agentprotocol.DesiredConfig{SchemaVersion: agentprotocol.SchemaVersion, Version: 1, GeneratedAt: time.Now().UTC(), AgentNodeID: 17}, "test-key", privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := store.SaveDesiredConfig(ctx, signed); err != nil || !inserted {
+		t.Fatalf("SaveDesiredConfig = %v, %v", inserted, err)
+	}
+	if err := store.MarkConfigApplied(ctx, 1, signed.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResetAppliedRuntime(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.RuntimeState(ctx)
+	if err != nil || state.AppliedConfigVersion != 0 || state.AppliedConfigHash != "" || state.AppliedUserRevision != 0 {
+		t.Fatalf("runtime state after reset = %#v, %v", state, err)
+	}
+	if inserted, err := store.SaveDesiredConfig(ctx, signed); err != nil || !inserted {
+		t.Fatalf("same desired config was not re-queued after reset: %v, %v", inserted, err)
+	}
+}
+
 func TestTrafficWALSurvivesRestartAndRequiresExactAck(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "agent.db")

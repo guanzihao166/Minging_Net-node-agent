@@ -3,6 +3,7 @@ Description=IEPL Private Node Agent
 Documentation=https://github.com/guanzihao166/iepl-node-agent
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

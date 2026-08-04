@@ -18,6 +18,7 @@ type Protocol string
 
 const (
 	ProtocolVLESS      Protocol = "vless"
+	ProtocolVMess      Protocol = "vmess"
 	ProtocolTrojan     Protocol = "trojan"
 	ProtocolSS2022     Protocol = "shadowsocks2022"
 	ProtocolTUIC       Protocol = "tuic"
@@ -59,6 +60,7 @@ type Inbound struct {
 	SecurityProfileID      int64            `json:"security_profile_id,omitempty"`
 	TrafficMultiplierMilli int64            `json:"traffic_multiplier_milli"`
 	VLESS                  *VLESSConfig     `json:"vless,omitempty"`
+	VMess                  *VMessConfig     `json:"vmess,omitempty"`
 	Trojan                 *TrojanConfig    `json:"trojan,omitempty"`
 	SS2022                 *SS2022Config    `json:"shadowsocks2022,omitempty"`
 	TUIC                   *TUICConfig      `json:"tuic,omitempty"`
@@ -103,6 +105,10 @@ type VLESSConfig struct {
 	Decryption string `json:"decryption"`
 	Flow       string `json:"flow,omitempty"`
 }
+
+// VMess is intentionally fixed to UUID authentication with alterId 0 and
+// automatic cipher selection. The transport and TLS profile live on Inbound.
+type VMessConfig struct{}
 
 type TrojanConfig struct{}
 
@@ -295,6 +301,8 @@ func validateInbound(inbound Inbound, profile SecurityProfile, hasProfile bool) 
 	switch inbound.Protocol {
 	case ProtocolVLESS:
 		return validateVLESS(inbound, profile, hasProfile)
+	case ProtocolVMess:
+		return validateVMess(inbound, profile, hasProfile)
 	case ProtocolTrojan:
 		return validateTrojan(inbound, profile, hasProfile)
 	case ProtocolSS2022:
@@ -309,7 +317,7 @@ func validateInbound(inbound Inbound, profile SecurityProfile, hasProfile bool) 
 }
 
 func validateVLESS(inbound Inbound, profile SecurityProfile, hasProfile bool) error {
-	if inbound.VLESS == nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
+	if inbound.VLESS == nil || inbound.VMess != nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
 		return errors.New("vless protocol payload is invalid")
 	}
 	if !hasProfile || profile.Type != SecurityTLS && profile.Type != SecurityReality {
@@ -332,8 +340,18 @@ func validateVLESS(inbound Inbound, profile SecurityProfile, hasProfile bool) er
 	return nil
 }
 
+func validateVMess(inbound Inbound, profile SecurityProfile, hasProfile bool) error {
+	if inbound.VMess == nil || inbound.VLESS != nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
+		return errors.New("vmess protocol payload is invalid")
+	}
+	if !hasProfile || profile.Type != SecurityTLS {
+		return errors.New("vmess requires tls")
+	}
+	return validateStreamTransport(inbound.Transport)
+}
+
 func validateTrojan(inbound Inbound, profile SecurityProfile, hasProfile bool) error {
-	if inbound.Trojan == nil || inbound.VLESS != nil || inbound.SS2022 != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
+	if inbound.Trojan == nil || inbound.VLESS != nil || inbound.VMess != nil || inbound.SS2022 != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
 		return errors.New("trojan protocol payload is invalid")
 	}
 	if !hasProfile || profile.Type != SecurityTLS {
@@ -343,7 +361,7 @@ func validateTrojan(inbound Inbound, profile SecurityProfile, hasProfile bool) e
 }
 
 func validateSS2022(inbound Inbound, hasProfile bool) error {
-	if inbound.SS2022 == nil || inbound.VLESS != nil || inbound.Trojan != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
+	if inbound.SS2022 == nil || inbound.VLESS != nil || inbound.VMess != nil || inbound.Trojan != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
 		return errors.New("shadowsocks2022 protocol payload is invalid")
 	}
 	if hasProfile || inbound.SecurityProfileID != 0 {
@@ -367,7 +385,7 @@ func validateSS2022(inbound Inbound, hasProfile bool) error {
 }
 
 func validateTUIC(inbound Inbound, profile SecurityProfile, hasProfile bool) error {
-	if inbound.TUIC == nil || inbound.VLESS != nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.Hysteria2 != nil {
+	if inbound.TUIC == nil || inbound.VLESS != nil || inbound.VMess != nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.Hysteria2 != nil {
 		return errors.New("tuic protocol payload is invalid")
 	}
 	if !hasProfile || profile.Type != SecurityTLS {
@@ -391,7 +409,7 @@ func validateTUIC(inbound Inbound, profile SecurityProfile, hasProfile bool) err
 }
 
 func validateHysteria2(inbound Inbound, profile SecurityProfile, hasProfile bool) error {
-	if inbound.Hysteria2 == nil || inbound.VLESS != nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.TUIC != nil {
+	if inbound.Hysteria2 == nil || inbound.VLESS != nil || inbound.VMess != nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.TUIC != nil {
 		return errors.New("hysteria2 protocol payload is invalid")
 	}
 	if !hasProfile || profile.Type != SecurityTLS {

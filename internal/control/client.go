@@ -117,6 +117,13 @@ type sessionWriter struct {
 	now        func() time.Time
 }
 
+func (w *sessionWriter) ping() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	deadline := w.now().Add(10 * time.Second)
+	return w.connection.WriteControl(websocket.PingMessage, nil, deadline)
+}
+
 func (w *sessionWriter) send(messageType string, payload any) error {
 	envelope, err := agentprotocol.NewEnvelope(uuid.NewString(), messageType, payload, w.now())
 	if err != nil {
@@ -191,9 +198,13 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
+	connection.SetPongHandler(func(string) error {
+		return connection.SetReadDeadline(c.now().Add(2*c.cfg.HeartbeatInterval + 30*time.Second))
+	})
 	go c.runHeartbeatAndTraffic(sessionCtx, writer, helloAck.SessionID, errCh)
 	go c.runMaintenance(sessionCtx, writer, errCh)
+	go c.runControlKeepalive(sessionCtx, writer, errCh)
 	go func() {
 		<-sessionCtx.Done()
 		_ = connection.Close()
@@ -279,6 +290,29 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 		case err := <-errCh:
 			return err
 		default:
+		}
+	}
+}
+
+func (c *Client) runControlKeepalive(ctx context.Context, writer *sessionWriter, errCh chan<- error) {
+	interval := 20 * time.Second
+	if c.cfg.HeartbeatInterval > 0 && 2*c.cfg.HeartbeatInterval < interval {
+		interval = 2 * c.cfg.HeartbeatInterval
+	}
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := writer.ping(); err != nil {
+				sendSessionError(errCh, err)
+				return
+			}
 		}
 	}
 }

@@ -79,7 +79,10 @@ func run(args []string, logger *slog.Logger) error {
 	}
 	defer runtime.Close()
 	if err := restoreRuntime(ctx, id.AgentNodeID, signingKey, stateStore, secrets, runtime); err != nil {
-		return err
+		logger.Warn("local runtime restore failed; requesting a full control-plane resync", "error", err)
+		if resetErr := stateStore.ResetAppliedRuntime(ctx); resetErr != nil {
+			return fmt.Errorf("reset failed local runtime state: %w", resetErr)
+		}
 	}
 	client, err := control.New(cfg, id, certificate, signingKey, stateStore, secrets, runtime, logger)
 	if err != nil {

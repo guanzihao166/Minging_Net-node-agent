@@ -39,7 +39,7 @@ func TestBuildsAllRequiredXrayProtocolFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(nodes) != 5 {
+	if len(nodes) != 6 {
 		t.Fatalf("nodes = %d", len(nodes))
 	}
 	for _, node := range nodes {
@@ -68,6 +68,9 @@ func TestBuildsAllRequiredXrayProtocolFamilies(t *testing.T) {
 	}
 	if nodes[4].info.Type != "hysteria2" || nodes[4].info.Protocol.HopPorts != "30000-30002" || nodes[4].info.Protocol.ObfsPassword == "" {
 		t.Fatalf("Hysteria2 mapping = %#v", nodes[4].info.Protocol)
+	}
+	if nodes[5].info.Type != "vmess" || nodes[5].info.Protocol.Security != "tls" || nodes[5].info.Protocol.Transport != "grpc" {
+		t.Fatalf("VMess TLS mapping = %#v", nodes[5].info.Protocol)
 	}
 }
 
@@ -210,6 +213,7 @@ func TestStartsAllRequiredXrayProtocolsAndAppliesUsers(t *testing.T) {
 	desired.Inbounds[3].Port = base + 3
 	desired.Inbounds[4].Port = base + 4
 	desired.Inbounds[4].Hysteria2.HopPorts = fmt.Sprintf("%d-%d", base+5, base+7)
+	desired.Inbounds[5].Port = base + 8
 	runtime, err := NewXray(testRuntimeSecrets(t))
 	if err != nil {
 		t.Fatal(err)
@@ -224,6 +228,7 @@ func TestStartsAllRequiredXrayProtocolsAndAppliesUsers(t *testing.T) {
 		{SubscriberID: 103, InboundID: 51, Kind: "key", Value: "12345678901234567890123456789012"},
 		{SubscriberID: 104, InboundID: 61, Kind: "tuic", Value: "8712f32c-6655-464c-ba44-77939c2a828a"},
 		{SubscriberID: 105, InboundID: 71, Kind: "password", Value: "hysteria-test-password"},
+		{SubscriberID: 106, InboundID: 81, Kind: "uuid", Value: "24c3a5d4-215b-4963-8f54-94ac3b22c53f"},
 	}
 	if err := runtime.ApplyUsers(context.Background(), users); err != nil {
 		t.Fatalf("ApplyUsers: %v", err)
@@ -300,6 +305,9 @@ func testDesiredConfig() agentprotocol.DesiredConfig {
 			{ID: 71, Name: "hysteria2", Protocol: agentprotocol.ProtocolHysteria2, Listen: "0.0.0.0", Port: 21005, Network: "udp", Enabled: true,
 				Transport: agentprotocol.Transport{Type: agentprotocol.TransportQUIC}, SecurityProfileID: 3, TrafficMultiplierMilli: 1000,
 				Hysteria2: &agentprotocol.Hysteria2Config{UpMbps: 100, DownMbps: 100, Obfs: "salamander", ObfsPasswordRef: "agent-secret:hy2-obfs:71:1", HopPorts: "30000-30002", HopIntervalSeconds: 30}},
+			{ID: 81, Name: "vmess-grpc", Protocol: agentprotocol.ProtocolVMess, Listen: "0.0.0.0", Port: 21006, Network: "tcp", Enabled: true,
+				Transport: agentprotocol.Transport{Type: agentprotocol.TransportGRPC, ServiceName: "vmess"}, SecurityProfileID: 1, TrafficMultiplierMilli: 1000,
+				VMess: &agentprotocol.VMessConfig{}},
 		},
 	}
 }

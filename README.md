@@ -11,6 +11,7 @@ management ports on a node.
 Supported inbound families:
 
 - VLESS over TLS, WebSocket TLS, gRPC TLS, and TCP REALITY Vision
+- VMess over TLS, WebSocket TLS, and gRPC TLS
 - Trojan over TLS, WebSocket TLS, and gRPC TLS
 - Shadowsocks 2022 AES-128-GCM, AES-256-GCM, and ChaCha20-Poly1305
 - TUIC v5 over TLS/QUIC
@@ -32,7 +33,7 @@ signs the release checksum manifest.
 Public GitHub release installation:
 
 ```sh
-sh install.sh --version v0.1.24 \
+sh install.sh --version v0.1.26 \
   --enroll-url https://www.m7mt.com/api/v1/agent/enroll \
   --enroll-token '<one-time-token>'
 ```

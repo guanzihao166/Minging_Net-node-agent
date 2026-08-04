@@ -236,6 +236,34 @@ func (s *Store) RuntimeState(ctx context.Context) (RuntimeState, error) {
 	}, rows.Err()
 }
 
+// ResetAppliedRuntime makes the next control session request the currently
+// desired configuration and user snapshot again after local restoration failed.
+func (s *Store) ResetAppliedRuntime(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stateValue, err := runtimeStateTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if stateValue.AppliedConfigVersion > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE config_revisions
+			SET status = 'received', applied_at = NULL WHERE version = ?`, stateValue.AppliedConfigVersion); err != nil {
+			return err
+		}
+	}
+	for key, value := range map[string]string{
+		"applied_config_version": "0", "applied_config_hash": "", "applied_user_revision": "0",
+	} {
+		if _, err := tx.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = ?`, value, key); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) SaveDesiredConfig(ctx context.Context, signed agentprotocol.SignedConfig) (bool, error) {
 	raw, err := json.Marshal(signed)
 	if err != nil {
