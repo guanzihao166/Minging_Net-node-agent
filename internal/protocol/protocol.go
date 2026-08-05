@@ -344,8 +344,8 @@ func validateVMess(inbound Inbound, profile SecurityProfile, hasProfile bool) er
 	if inbound.VMess == nil || inbound.VLESS != nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
 		return errors.New("vmess protocol payload is invalid")
 	}
-	if !hasProfile || profile.Type != SecurityTLS {
-		return errors.New("vmess requires tls")
+	if hasProfile && profile.Type != SecurityTLS {
+		return errors.New("vmess only supports tls or no security profile")
 	}
 	return validateStreamTransport(inbound.Transport)
 }
