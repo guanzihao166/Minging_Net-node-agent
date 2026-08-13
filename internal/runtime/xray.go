@@ -111,44 +111,32 @@ func (r *XrayRuntime) ApplyUsers(_ context.Context, users []agentprotocol.UserCr
 		}
 		return errors.New("Xray config must be applied before users")
 	}
-	grouped, err := panelUsersByInbound(*r.config, users)
+	if _, err := panelUsersByInbound(*r.config, users); err != nil {
+		return err
+	}
+	nodes, err := r.buildNodes(*r.config)
 	if err != nil {
 		return err
 	}
-	oldGrouped, err := panelUsersByInbound(*r.config, r.users)
+	previousUsers := append([]agentprotocol.UserCredential(nil), r.users...)
+	previous := r.active
+	closeErr := previous.Close()
+	r.pendingAccess = append(r.pendingAccess, accessSamplesToItems(previous.GetUserAccessSlice())...)
+	r.active = nil
+	if closeErr != nil {
+		r.active, _ = r.startCore(nodes, *r.config, previousUsers)
+		return closeErr
+	}
+	candidate, err := r.startCore(nodes, *r.config, users)
 	if err != nil {
+		restored, restoreErr := r.startCore(nodes, *r.config, previousUsers)
+		r.active = restored
+		if restoreErr != nil {
+			return fmt.Errorf("apply users: %w; restore previous users: %v", err, restoreErr)
+		}
 		return err
 	}
-	for _, inbound := range r.config.Inbounds {
-		if !inbound.Enabled {
-			continue
-		}
-		tag := inboundTag(inbound.ID)
-		nodeInfo, err := r.panelNodeForInbound(*r.config, inbound)
-		if err != nil {
-			return err
-		}
-		oldUsers := oldGrouped[inbound.ID]
-		newUsers := grouped[inbound.ID]
-		if len(oldUsers) > 0 {
-			if err := r.active.DelUsers(oldUsers, tag, nodeInfo); err != nil {
-				return fmt.Errorf("remove users from %s: %w", tag, err)
-			}
-		}
-		r.active.LimiterManager.Delete(tag)
-		limiter := r.active.LimiterManager.Add(tag, newUsers, map[int]int{}, nodeInfo.Type)
-		if len(newUsers) > 0 {
-			if _, err := r.active.AddUsers(&ppcore.AddUsersParams{Tag: tag, Users: newUsers, NodeInfo: nodeInfo}); err != nil {
-				if len(oldUsers) > 0 {
-					r.active.LimiterManager.Delete(tag)
-					r.active.LimiterManager.Add(tag, oldUsers, map[int]int{}, nodeInfo.Type)
-					_, _ = r.active.AddUsers(&ppcore.AddUsersParams{Tag: tag, Users: oldUsers, NodeInfo: nodeInfo})
-				}
-				return fmt.Errorf("add users to %s: %w", tag, err)
-			}
-		}
-		applyExpiryAndLimits(limiter, tag, users, inbound.ID)
-	}
+	r.active = candidate
 	r.users = append([]agentprotocol.UserCredential(nil), users...)
 	return nil
 }

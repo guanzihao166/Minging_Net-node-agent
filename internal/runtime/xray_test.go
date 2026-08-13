@@ -268,6 +268,45 @@ func TestStartsAllRequiredXrayProtocolsAndAppliesUsers(t *testing.T) {
 	}
 }
 
+func TestApplyUsersRecoversFromRuntimeUserDrift(t *testing.T) {
+	desired := testDesiredConfig()
+	desired.Inbounds = []agentprotocol.Inbound{desired.Inbounds[0]}
+	desired.Inbounds[0].Port = availableProtocolPortBlock(t)
+	runtime, err := NewXray(testRuntimeSecrets(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if err := runtime.ApplyConfig(context.Background(), desired); err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	users := []agentprotocol.UserCredential{{
+		SubscriberID: 101, InboundID: desired.Inbounds[0].ID,
+		Kind: "uuid", Value: "3e285077-7932-4e8d-b232-9b6d58dd6671",
+	}}
+	if err := runtime.ApplyUsers(context.Background(), users); err != nil {
+		t.Fatalf("initial ApplyUsers: %v", err)
+	}
+	grouped, err := panelUsersByInbound(desired, users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbound := desired.Inbounds[0]
+	nodeInfo, err := runtime.panelNodeForInbound(desired, inbound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.active.DelUsers(grouped[inbound.ID], inboundTag(inbound.ID), nodeInfo); err != nil {
+		t.Fatalf("simulate runtime drift: %v", err)
+	}
+	if err := runtime.ApplyUsers(context.Background(), users); err != nil {
+		t.Fatalf("ApplyUsers after runtime drift: %v", err)
+	}
+	if len(runtime.users) != 1 || runtime.users[0].SubscriberID != 101 {
+		t.Fatalf("users after runtime recovery = %#v", runtime.users)
+	}
+}
+
 func testDesiredConfig() agentprotocol.DesiredConfig {
 	return agentprotocol.DesiredConfig{
 		SchemaVersion: agentprotocol.SchemaVersion, Version: 1,
