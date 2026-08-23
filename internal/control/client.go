@@ -539,6 +539,12 @@ func (c *Client) applyUserSnapshot(ctx context.Context, writer *sessionWriter, e
 	}
 	c.runtimeSyncMu.Lock()
 	defer c.runtimeSyncMu.Unlock()
+	if err := c.runtime.DisconnectUsers(ctx, snapshot.Users); err != nil {
+		// ApplyUsers performs the existing full-core rebuild as a compatibility
+		// fallback. Keep applying the snapshot even if Xray reports a stale user
+		// during the explicit close step.
+		c.logger.Warn("explicitly disconnect stale user links", "error", err)
+	}
 	if err := c.runtime.ApplyUsers(ctx, snapshot.Users); err != nil {
 		_ = writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{
 			Revision: snapshot.Revision, Status: "failed", ErrorCode: "user_apply_failed",

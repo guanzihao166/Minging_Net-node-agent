@@ -14,6 +14,9 @@ type Status struct {
 
 type Runtime interface {
 	ApplyConfig(context.Context, agentprotocol.DesiredConfig) error
+	// DisconnectUsers closes data-plane links for users that are removed or
+	// changed by the next snapshot before the runtime is rebuilt.
+	DisconnectUsers(context.Context, []agentprotocol.UserCredential) error
 	ApplyUsers(context.Context, []agentprotocol.UserCredential) error
 	CollectTraffic(context.Context) ([]state.TrafficDelta, error)
 	CollectAccess(context.Context) ([]agentprotocol.AccessItem, error)

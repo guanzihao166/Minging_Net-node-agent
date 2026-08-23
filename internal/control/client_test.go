@@ -183,8 +183,8 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.configApplies != 1 || runtime.userApplies != 1 {
-		t.Fatalf("runtime applies = config %d users %d", runtime.configApplies, runtime.userApplies)
+	if runtime.configApplies != 1 || runtime.disconnects != 1 || runtime.userApplies != 1 {
+		t.Fatalf("runtime applies = config %d disconnects %d users %d", runtime.configApplies, runtime.disconnects, runtime.userApplies)
 	}
 }
 
@@ -309,6 +309,7 @@ func tlsCertificateForTest() (certificate tls.Certificate) { return certificate 
 type fakeRuntime struct {
 	mu            sync.Mutex
 	configApplies int
+	disconnects   int
 	userApplies   int
 	trafficSent   bool
 }
@@ -323,6 +324,13 @@ func (f *fakeRuntime) ApplyConfig(context.Context, agentprotocol.DesiredConfig) 
 func (f *fakeRuntime) ApplyUsers(context.Context, []agentprotocol.UserCredential) error {
 	f.mu.Lock()
 	f.userApplies++
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeRuntime) DisconnectUsers(context.Context, []agentprotocol.UserCredential) error {
+	f.mu.Lock()
+	f.disconnects++
 	f.mu.Unlock()
 	return nil
 }

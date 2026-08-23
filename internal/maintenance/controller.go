@@ -88,7 +88,9 @@ func (c *Controller) HandleCommand(ctx context.Context, signed agentprotocol.Sig
 		return result
 	}
 	if err := agentprotocol.VerifySignedMaintenanceCommand(signed, c.identity.ConfigSigningKeyID, c.signingKey, c.now()); err != nil {
-		result.Message = "维护指令签名校验失败"
+		// Keep the user-facing prefix stable, but retain the concrete verifier
+		// reason so a rotated/stale key can be diagnosed without node access.
+		result.Message = "维护指令签名校验失败：" + compactMessage(err.Error(), 160)
 		return result
 	}
 	if command.Action == agentprotocol.MaintenanceActionCheckUpdate {

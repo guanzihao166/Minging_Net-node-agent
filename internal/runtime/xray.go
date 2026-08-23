@@ -141,6 +141,81 @@ func (r *XrayRuntime) ApplyUsers(_ context.Context, users []agentprotocol.UserCr
 	return nil
 }
 
+// DisconnectUsers explicitly tears down links for credentials that disappear
+// or change in the next snapshot. ApplyUsers still rebuilds the core afterward;
+// this step makes revocation and quota-generation changes take effect before
+// the new runtime is started instead of relying on Xray's core close timing.
+func (r *XrayRuntime) DisconnectUsers(_ context.Context, nextUsers []agentprotocol.UserCredential) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active == nil || r.config == nil || len(r.users) == 0 {
+		return nil
+	}
+
+	next := make(map[string]agentprotocol.UserCredential, len(nextUsers))
+	for _, user := range nextUsers {
+		next[userKey(user)] = user
+	}
+	stale := make([]agentprotocol.UserCredential, 0)
+	for _, previous := range r.users {
+		current, ok := next[userKey(previous)]
+		if !ok || !sameRuntimeCredential(previous, current) {
+			stale = append(stale, previous)
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+
+	grouped := make(map[int64][]panel.UserInfo)
+	for _, user := range stale {
+		if user.InboundID <= 0 || user.SubscriberID <= 0 || strings.TrimSpace(user.Value) == "" {
+			continue
+		}
+		// Expiry is deliberately ignored here: an expired credential still has
+		// to be removed from Xray so an existing link cannot survive the update.
+		grouped[user.InboundID] = append(grouped[user.InboundID], panel.UserInfo{
+			Id: int(user.SubscriberID), Uuid: user.Value,
+		})
+	}
+	var firstErr error
+	for inboundID, users := range grouped {
+		if len(users) == 0 {
+			continue
+		}
+		nodeInfo, err := r.panelNodeForInbound(*r.config, findInbound(*r.config, inboundID))
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := r.active.DelUsers(users, inboundTag(inboundID), nodeInfo); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("disconnect users on inbound %d: %w", inboundID, err)
+		}
+	}
+	return firstErr
+}
+
+func userKey(user agentprotocol.UserCredential) string {
+	return fmt.Sprintf("%d/%d", user.InboundID, user.SubscriberID)
+}
+
+func sameRuntimeCredential(left, right agentprotocol.UserCredential) bool {
+	return left.Kind == right.Kind && left.Value == right.Value &&
+		left.ExpiresAt == right.ExpiresAt && left.SpeedLimitBPS == right.SpeedLimitBPS &&
+		left.DeviceLimit == right.DeviceLimit && left.QuotaGeneration == right.QuotaGeneration
+}
+
+func findInbound(desired agentprotocol.DesiredConfig, id int64) agentprotocol.Inbound {
+	for _, inbound := range desired.Inbounds {
+		if inbound.ID == id {
+			return inbound
+		}
+	}
+	return agentprotocol.Inbound{ID: id}
+}
+
 func (r *XrayRuntime) CollectTraffic(_ context.Context) ([]state.TrafficDelta, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
