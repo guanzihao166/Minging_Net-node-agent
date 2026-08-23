@@ -239,6 +239,10 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 			if err := c.applyUserSnapshot(sessionCtx, writer, envelope); err != nil {
 				c.logger.Warn("user snapshot rejected", "error", err)
 			}
+		case agentprotocol.TypeUserDisconnect:
+			if err := c.applyUserDisconnect(sessionCtx, writer, envelope); err != nil {
+				c.logger.Warn("targeted user disconnect failed", "error", err)
+			}
 		case agentprotocol.TypeTrafficAck:
 			var ack agentprotocol.TrafficAck
 			if err := agentprotocol.DecodePayload(envelope, &ack); err != nil {
@@ -566,6 +570,20 @@ func (c *Client) applyUserSnapshot(ctx context.Context, writer *sessionWriter, e
 		return err
 	}
 	return writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{Revision: snapshot.Revision, Status: "succeeded"})
+}
+
+func (c *Client) applyUserDisconnect(ctx context.Context, writer *sessionWriter, envelope agentprotocol.Envelope) error {
+	var request agentprotocol.UserDisconnect
+	if err := agentprotocol.DecodePayload(envelope, &request); err != nil {
+		return err
+	}
+	c.runtimeSyncMu.Lock()
+	defer c.runtimeSyncMu.Unlock()
+	if err := c.runtime.DisconnectSubscribers(ctx, request.SubscriberIDs); err != nil {
+		_ = writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{Status: "failed", ErrorCode: "targeted_disconnect_failed", ErrorMessage: "runtime rejected targeted disconnect"})
+		return err
+	}
+	return writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{Status: "succeeded"})
 }
 
 func normalizedCredentialKind(value string) string {

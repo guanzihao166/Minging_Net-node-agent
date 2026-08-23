@@ -166,7 +166,36 @@ func (r *XrayRuntime) DisconnectUsers(_ context.Context, nextUsers []agentprotoc
 	if len(stale) == 0 {
 		return nil
 	}
+	return r.disconnectUsersLocked(stale)
+}
 
+// DisconnectSubscribers tears down only the selected subscribers' links.
+// The active Xray core remains running, so unrelated users keep their sessions.
+func (r *XrayRuntime) DisconnectSubscribers(_ context.Context, subscriberIDs []int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active == nil || r.config == nil || len(r.users) == 0 || len(subscriberIDs) == 0 {
+		return nil
+	}
+	wanted := make(map[int64]struct{}, len(subscriberIDs))
+	for _, id := range subscriberIDs {
+		if id > 0 {
+			wanted[id] = struct{}{}
+		}
+	}
+	stale := make([]agentprotocol.UserCredential, 0)
+	for _, user := range r.users {
+		if _, ok := wanted[user.SubscriberID]; ok {
+			stale = append(stale, user)
+		}
+	}
+	return r.disconnectUsersLocked(stale)
+}
+
+func (r *XrayRuntime) disconnectUsersLocked(stale []agentprotocol.UserCredential) error {
+	if len(stale) == 0 {
+		return nil
+	}
 	grouped := make(map[int64][]panel.UserInfo)
 	for _, user := range stale {
 		if user.InboundID <= 0 || user.SubscriberID <= 0 || strings.TrimSpace(user.Value) == "" {

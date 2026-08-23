@@ -335,6 +335,13 @@ func (f *fakeRuntime) DisconnectUsers(context.Context, []agentprotocol.UserCrede
 	return nil
 }
 
+func (f *fakeRuntime) DisconnectSubscribers(context.Context, []int64) error {
+	f.mu.Lock()
+	f.disconnects++
+	f.mu.Unlock()
+	return nil
+}
+
 func (f *fakeRuntime) CollectTraffic(context.Context) ([]state.TrafficDelta, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
