@@ -16,8 +16,8 @@ func TestParseRunUsesRealtimeReportingIntervals(t *testing.T) {
 	if cfg.HeartbeatInterval != 5*time.Second {
 		t.Fatalf("HeartbeatInterval = %s, want 5s", cfg.HeartbeatInterval)
 	}
-	if cfg.AccessInterval != time.Minute {
-		t.Fatalf("AccessInterval = %s, want 1m", cfg.AccessInterval)
+	if cfg.AccessInterval != 15*time.Second {
+		t.Fatalf("AccessInterval = %s, want 15s", cfg.AccessInterval)
 	}
 }
 

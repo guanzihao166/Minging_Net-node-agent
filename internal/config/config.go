@@ -43,7 +43,7 @@ func Parse(args []string, version string) (Config, error) {
 	set.StringVar(&cfg.EnrollmentTokenFile, "token-file", "", "one-time enrollment token file")
 	set.DurationVar(&cfg.HeartbeatInterval, "heartbeat", 5*time.Second, "heartbeat and online snapshot interval")
 	set.DurationVar(&cfg.TrafficInterval, "traffic-interval", time.Second, "traffic WAL interval")
-	set.DurationVar(&cfg.AccessInterval, "access-interval", time.Minute, "domain access WAL interval")
+	set.DurationVar(&cfg.AccessInterval, "access-interval", 15*time.Second, "domain access WAL interval")
 	set.DurationVar(&cfg.ReconnectMin, "reconnect-min", time.Second, "minimum reconnect delay")
 	set.DurationVar(&cfg.ReconnectMax, "reconnect-max", time.Minute, "maximum reconnect delay")
 	set.Int64Var(&cfg.MaxFrameBytes, "max-frame-bytes", 1024*1024, "maximum WSS frame size")

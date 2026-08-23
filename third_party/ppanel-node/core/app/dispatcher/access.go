@@ -19,9 +19,9 @@ import (
 
 const (
 	accessBucketDuration       = 5 * time.Minute
-	accessCheckpointInterval   = 5 * time.Minute
+	accessCheckpointInterval   = 15 * time.Second
 	defaultAccessMaxSessions   = 20000
-	defaultAccessDomainsPerKey = 128
+	defaultAccessDomainsPerKey = 1024
 	accessOverflowHost         = "other.invalid"
 )
 
