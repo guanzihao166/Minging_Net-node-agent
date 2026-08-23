@@ -246,9 +246,6 @@ func (m *Manager) installRelease(ctx context.Context, targetVersion string) erro
 	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		return fmt.Errorf("unsupported architecture %s", runtime.GOARCH)
 	}
-	if err := syncSystemClock(ctx); err != nil {
-		return err
-	}
 	asset := "iepl-agent-linux-" + runtime.GOARCH
 	base := releaseDownloadBase + "/" + targetVersion
 	checksums, err := m.download(ctx, base+"/checksums.txt", 1024*1024)
@@ -320,45 +317,10 @@ func (m *Manager) installRelease(ctx context.Context, targetVersion string) erro
 	return nil
 }
 
-// syncSystemClock uses an available immediate-step NTP client on both full
-// systemd hosts and minimal OpenRC/Alpine images before release validation.
-func syncSystemClock(ctx context.Context) error {
-	candidates := []struct {
-		path string
-		args []string
-	}{
-		{"/usr/bin/chronyc", []string{"-a", "makestep"}},
-		{"/usr/sbin/chronyc", []string{"-a", "makestep"}},
-		{"/usr/sbin/ntpdate", []string{"-u", "pool.ntp.org", "time.google.com"}},
-		{"/sbin/ntpdate", []string{"-u", "pool.ntp.org", "time.google.com"}},
-		{"/bin/busybox", []string{"ntpd", "-q", "-n", "-p", "pool.ntp.org"}},
-		{"/sbin/busybox", []string{"ntpd", "-q", "-n", "-p", "pool.ntp.org"}},
-		{"/usr/bin/timedatectl", []string{"set-ntp", "true"}},
-		{"/bin/timedatectl", []string{"set-ntp", "true"}},
-	}
-	var lastErr error
-	found := false
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate.path); err != nil {
-			continue
-		}
-		found = true
-		commandCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		output, err := exec.CommandContext(commandCtx, candidate.path, candidate.args...).CombinedOutput()
-		cancel()
-		if err == nil {
-			return nil
-		}
-		lastErr = fmt.Errorf("%s: %w: %s", filepath.Base(candidate.path), err, compactMessage(string(output), 240))
-	}
-	if !found {
-		return nil
-	}
-	if lastErr == nil {
-		return errors.New("NTP synchronization failed")
-	}
-	return fmt.Errorf("NTP synchronization failed: %w", lastErr)
-}
+// syncSystemClock was removed: best-effort clock stepping blocked self-updates
+// on hosts whose only tool was `timedatectl set-ntp` (unsupported in many
+// containers), failing the whole release install. TLS and signed-command
+// validation tolerate small skews, so updates no longer depend on NTP.
 
 func (m *Manager) download(ctx context.Context, source string, limit int64) ([]byte, error) {
 	var lastErr error

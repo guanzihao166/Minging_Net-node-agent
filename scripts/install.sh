@@ -43,38 +43,10 @@ if [ -n "$enroll_url" ]; then
   esac
 fi
 
-# Align the host clock before downloading or installing a release. This keeps
-# signed maintenance commands and TLS validation reliable on minimal images.
-ntp_sync_before_install() {
-  ntp_synced=0
-  if command -v chronyc >/dev/null 2>&1; then
-    if chronyc -a makestep >/dev/null 2>&1 || chronyc makestep >/dev/null 2>&1; then
-      ntp_synced=1
-    fi
-  fi
-  if [ "$ntp_synced" -eq 0 ] && command -v ntpdate >/dev/null 2>&1; then
-    if ntpdate -u pool.ntp.org time.google.com >/dev/null 2>&1; then
-      ntp_synced=1
-    fi
-  fi
-  if [ "$ntp_synced" -eq 0 ] && command -v busybox >/dev/null 2>&1; then
-    if busybox ntpd -q -n -p pool.ntp.org >/dev/null 2>&1; then
-      ntp_synced=1
-    fi
-  fi
-  if [ "$ntp_synced" -eq 0 ] && command -v timedatectl >/dev/null 2>&1; then
-    if timedatectl set-ntp true >/dev/null 2>&1; then
-      ntp_synced=1
-    fi
-  fi
-  if [ "$ntp_synced" -eq 1 ]; then
-    echo "host clock synchronized with NTP before installation"
-  else
-    echo "NTP synchronization tool not available; continuing with the current host clock" >&2
-  fi
-}
-
-ntp_sync_before_install
+# Host clock alignment is intentionally not attempted here: best-effort NTP
+# stepping (chrony/ntpdate/busybox/timedatectl) blocked installs on hosts where
+# no tool was usable, e.g. containers reporting "NTP not supported". TLS and
+# signed maintenance commands tolerate small clock skews.
 
 case "$(uname -m)" in
   x86_64|amd64) arch="amd64" ;;
