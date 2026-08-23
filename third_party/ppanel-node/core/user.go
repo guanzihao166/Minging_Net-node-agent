@@ -72,6 +72,29 @@ func (vc *XrayCore) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeIn
 	return nil
 }
 
+// CloseUserLinks closes only the currently active links for the selected users.
+// The Xray user manager, uid map, counters, and LinkManager entries remain
+// intact so the same credentials can establish a new connection immediately.
+func (vc *XrayCore) CloseUserLinks(users []panel.UserInfo, tag string) error {
+	if vc == nil || vc.dispatcher == nil || len(users) == 0 {
+		return nil
+	}
+	vc.users.mapLock.RLock()
+	defer vc.users.mapLock.RUnlock()
+	for i := range users {
+		if strings.TrimSpace(users[i].Uuid) == "" {
+			continue
+		}
+		user := format.UserTag(tag, users[i].Uuid)
+		if value, ok := vc.dispatcher.LinkManagers.Load(user); ok {
+			if manager, ok := value.(*dispatcher.LinkManager); ok && manager != nil {
+				manager.CloseAll()
+			}
+		}
+	}
+	return nil
+}
+
 func (vc *XrayCore) GetUserTrafficSlice(tag string, mintraffic int) ([]panel.UserTraffic, error) {
 	trafficSlice := make([]panel.UserTraffic, 0)
 	vc.users.mapLock.RLock()

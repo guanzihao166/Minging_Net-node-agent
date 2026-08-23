@@ -202,7 +202,8 @@ func (r *XrayRuntime) disconnectUsersLocked(stale []agentprotocol.UserCredential
 			continue
 		}
 		// Expiry is deliberately ignored here: an expired credential still has
-		// to be removed from Xray so an existing link cannot survive the update.
+		// to have its existing links closed. The credential itself stays loaded
+		// so a targeted bandwidth action does not break new connections.
 		grouped[user.InboundID] = append(grouped[user.InboundID], panel.UserInfo{
 			Id: int(user.SubscriberID), Uuid: user.Value,
 		})
@@ -212,14 +213,7 @@ func (r *XrayRuntime) disconnectUsersLocked(stale []agentprotocol.UserCredential
 		if len(users) == 0 {
 			continue
 		}
-		nodeInfo, err := r.panelNodeForInbound(*r.config, findInbound(*r.config, inboundID))
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		if err := r.active.DelUsers(users, inboundTag(inboundID), nodeInfo); err != nil && firstErr == nil {
+		if err := r.active.CloseUserLinks(users, inboundTag(inboundID)); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("disconnect users on inbound %d: %w", inboundID, err)
 		}
 	}
