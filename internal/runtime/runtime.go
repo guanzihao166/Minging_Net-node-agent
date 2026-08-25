@@ -8,8 +8,9 @@ import (
 )
 
 type Status struct {
-	Running bool
-	Version string
+	Running        bool
+	Version        string
+	CoreGeneration uint64
 }
 
 type Runtime interface {

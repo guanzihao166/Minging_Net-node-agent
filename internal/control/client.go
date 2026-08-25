@@ -439,7 +439,7 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				AppliedConfigHash:    stateValue.AppliedConfigHash,
 				AppliedUserRevision:  stateValue.AppliedUserRevision,
 				WALPendingBatches:    pendingBatches, WALPendingBytes: pendingBytes,
-				XrayRunning: runtimeStatus.Running, XrayVersion: runtimeStatus.Version,
+				XrayRunning: runtimeStatus.Running, XrayVersion: runtimeStatus.Version, XrayCoreGeneration: runtimeStatus.CoreGeneration,
 				SystemMetrics: systemMetrics,
 			})
 			if err != nil {

@@ -69,6 +69,7 @@ type Heartbeat struct {
 	WALPendingBytes      uint64         `json:"wal_pending_bytes"`
 	XrayRunning          bool           `json:"xray_running"`
 	XrayVersion          string         `json:"xray_version,omitempty"`
+	XrayCoreGeneration   uint64         `json:"xray_core_generation,omitempty"`
 	SystemMetrics        *SystemMetrics `json:"system_metrics,omitempty"`
 }
 

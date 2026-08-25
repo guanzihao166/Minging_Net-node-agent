@@ -28,12 +28,13 @@ import (
 const embeddedXrayVersion = "wyx2685-xray-20260414"
 
 type XrayRuntime struct {
-	mu            sync.Mutex
-	secrets       *secretstore.Store
-	active        *ppcore.XrayCore
-	config        *agentprotocol.DesiredConfig
-	users         []agentprotocol.UserCredential
-	pendingAccess []agentprotocol.AccessItem
+	mu             sync.Mutex
+	secrets        *secretstore.Store
+	active         *ppcore.XrayCore
+	coreGeneration uint64
+	config         *agentprotocol.DesiredConfig
+	users          []agentprotocol.UserCredential
+	pendingAccess  []agentprotocol.AccessItem
 }
 
 func NewXray(secrets *secretstore.Store) (*XrayRuntime, error) {
@@ -74,12 +75,16 @@ func (r *XrayRuntime) ApplyConfig(_ context.Context, desired agentprotocol.Desir
 	if err != nil {
 		if previousConfig != nil {
 			if previousNodes, buildErr := r.buildNodes(*previousConfig); buildErr == nil {
-				r.active, _ = r.startCore(previousNodes, *previousConfig, previousUsers)
+				if restored, restoreErr := r.startCore(previousNodes, *previousConfig, previousUsers); restoreErr == nil {
+					r.active = restored
+					r.coreGeneration++
+				}
 			}
 		}
 		return err
 	}
 	r.active = candidate
+	r.coreGeneration++
 	copyDesired := desired
 	r.config = &copyDesired
 	r.users = candidateUsers
@@ -258,7 +263,10 @@ func (r *XrayRuntime) rebuildUsersLocked(users []agentprotocol.UserCredential, i
 	r.pendingAccess = append(r.pendingAccess, accessSamplesToItems(previous.GetUserAccessSlice())...)
 	r.active = nil
 	if closeErr != nil {
-		r.active, _ = r.startCore(nodes, *r.config, previousUsers)
+		if restored, restoreErr := r.startCore(nodes, *r.config, previousUsers); restoreErr == nil {
+			r.active = restored
+			r.coreGeneration++
+		}
 		return fmt.Errorf("incremental apply failed: %w; close fallback core: %v", incrementalErr, closeErr)
 	}
 	candidate, rebuildErr := r.startCore(nodes, *r.config, users)
@@ -268,9 +276,11 @@ func (r *XrayRuntime) rebuildUsersLocked(users []agentprotocol.UserCredential, i
 		if restoreErr != nil {
 			return fmt.Errorf("incremental apply failed: %w; rebuild: %v; restore previous users: %v", incrementalErr, rebuildErr, restoreErr)
 		}
+		r.coreGeneration++
 		return fmt.Errorf("incremental apply failed: %w; rebuild: %v", incrementalErr, rebuildErr)
 	}
 	r.active = candidate
+	r.coreGeneration++
 	r.users = append([]agentprotocol.UserCredential(nil), users...)
 	return nil
 }
@@ -457,7 +467,7 @@ func (r *XrayRuntime) CollectOnline(_ context.Context) ([]agentprotocol.OnlineUs
 func (r *XrayRuntime) Status(context.Context) Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return Status{Running: r.active != nil, Version: embeddedXrayVersion}
+	return Status{Running: r.active != nil, Version: embeddedXrayVersion, CoreGeneration: r.coreGeneration}
 }
 
 func (r *XrayRuntime) Close() error {

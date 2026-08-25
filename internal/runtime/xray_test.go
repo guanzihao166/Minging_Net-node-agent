@@ -328,6 +328,7 @@ func TestApplyUsersUpdatesOneUserWithoutRestartingCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	active := runtime.active
+	generation := runtime.Status(context.Background()).CoreGeneration
 	users[0].SpeedLimitBPS = 5_000_000
 	users[0].DeviceLimit = 4
 	if err := runtime.ApplyUsers(context.Background(), users); err != nil {
@@ -335,6 +336,9 @@ func TestApplyUsersUpdatesOneUserWithoutRestartingCore(t *testing.T) {
 	}
 	if runtime.active != active {
 		t.Fatal("single-user policy update restarted the Xray core")
+	}
+	if got := runtime.Status(context.Background()).CoreGeneration; got != generation {
+		t.Fatalf("single-user policy update core generation = %d, want %d", got, generation)
 	}
 	userLimiter, err := runtime.active.LimiterManager.Get(inboundTag(desired.Inbounds[0].ID))
 	if err != nil {
