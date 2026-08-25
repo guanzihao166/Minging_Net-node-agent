@@ -328,6 +328,13 @@ func (f *fakeRuntime) ApplyUsers(context.Context, []agentprotocol.UserCredential
 	return nil
 }
 
+func (f *fakeRuntime) ApplyUserDelta(_ context.Context, delta agentprotocol.UserDelta) ([]agentprotocol.UserCredential, error) {
+	f.mu.Lock()
+	f.userApplies++
+	f.mu.Unlock()
+	return append([]agentprotocol.UserCredential(nil), delta.Upserts...), nil
+}
+
 func (f *fakeRuntime) DisconnectUsers(context.Context, []agentprotocol.UserCredential) error {
 	f.mu.Lock()
 	f.disconnects++

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	inboundbuilder "github.com/perfect-panel/ppanel-node/core/inbound"
+	"github.com/perfect-panel/ppanel-node/limiter"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	M "github.com/sagernet/sing/common/metadata"
 
@@ -304,6 +305,48 @@ func TestApplyUsersRecoversFromRuntimeUserDrift(t *testing.T) {
 	}
 	if len(runtime.users) != 1 || runtime.users[0].SubscriberID != 101 {
 		t.Fatalf("users after runtime recovery = %#v", runtime.users)
+	}
+}
+
+func TestApplyUsersUpdatesOneUserWithoutRestartingCore(t *testing.T) {
+	desired := testDesiredConfig()
+	desired.Inbounds = []agentprotocol.Inbound{desired.Inbounds[0]}
+	desired.Inbounds[0].Port = availableProtocolPortBlock(t)
+	runtime, err := NewXray(testRuntimeSecrets(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if err := runtime.ApplyConfig(context.Background(), desired); err != nil {
+		t.Fatal(err)
+	}
+	users := []agentprotocol.UserCredential{
+		{SubscriberID: 101, InboundID: desired.Inbounds[0].ID, Kind: "uuid", Value: "3e285077-7932-4e8d-b232-9b6d58dd6671", SpeedLimitBPS: 1_000_000, DeviceLimit: 2},
+		{SubscriberID: 102, InboundID: desired.Inbounds[0].ID, Kind: "uuid", Value: "4e285077-7932-4e8d-b232-9b6d58dd6671"},
+	}
+	if err := runtime.ApplyUsers(context.Background(), users); err != nil {
+		t.Fatal(err)
+	}
+	active := runtime.active
+	users[0].SpeedLimitBPS = 5_000_000
+	users[0].DeviceLimit = 4
+	if err := runtime.ApplyUsers(context.Background(), users); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.active != active {
+		t.Fatal("single-user policy update restarted the Xray core")
+	}
+	userLimiter, err := runtime.active.LimiterManager.Get(inboundTag(desired.Inbounds[0].ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, ok := userLimiter.UserLimitInfo.Load(inboundTag(desired.Inbounds[0].ID) + "|" + users[0].Value)
+	if !ok {
+		t.Fatal("updated user limiter entry missing")
+	}
+	limit := item.(*limiter.UserLimitInfo)
+	if limit.SpeedLimit != 40 || limit.DeviceLimit != 4 {
+		t.Fatalf("limiter policy = %#v", limit)
 	}
 }
 

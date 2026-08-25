@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,9 +112,142 @@ func (r *XrayRuntime) ApplyUsers(_ context.Context, users []agentprotocol.UserCr
 		}
 		return errors.New("Xray config must be applied before users")
 	}
-	if _, err := panelUsersByInbound(*r.config, users); err != nil {
+	if err := r.applyUsersIncrementalLocked(users); err == nil {
+		return nil
+	} else {
+		// A failed diff can leave an inbound manager partially updated. The
+		// established full rebuild remains the convergence fallback; normal
+		// user edits never enter this path.
+		return r.rebuildUsersLocked(users, err)
+	}
+}
+
+func (r *XrayRuntime) ApplyUserDelta(_ context.Context, delta agentprotocol.UserDelta) ([]agentprotocol.UserCredential, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if delta.Revision == 0 {
+		return nil, errors.New("user delta revision is invalid")
+	}
+	if r.active == nil || r.config == nil {
+		return nil, errors.New("Xray config must be applied before users")
+	}
+	next := make(map[string]agentprotocol.UserCredential, len(r.users)+len(delta.Upserts))
+	for _, user := range r.users {
+		next[userKey(user)] = user
+	}
+	for _, removed := range delta.Removals {
+		delete(next, fmt.Sprintf("%d/%d", removed.InboundID, removed.SubscriberID))
+	}
+	for _, user := range delta.Upserts {
+		if user.InboundID <= 0 || user.SubscriberID <= 0 || strings.TrimSpace(user.Value) == "" {
+			return nil, errors.New("user delta contains an invalid credential")
+		}
+		next[userKey(user)] = user
+	}
+	users := make([]agentprotocol.UserCredential, 0, len(next))
+	for _, user := range next {
+		users = append(users, user)
+	}
+	sort.Slice(users, func(i, j int) bool {
+		if users[i].InboundID != users[j].InboundID {
+			return users[i].InboundID < users[j].InboundID
+		}
+		return users[i].SubscriberID < users[j].SubscriberID
+	})
+	if err := r.applyUsersIncrementalLocked(users); err != nil {
+		if err := r.rebuildUsersLocked(users, err); err != nil {
+			return nil, err
+		}
+	}
+	return append([]agentprotocol.UserCredential(nil), r.users...), nil
+}
+
+func (r *XrayRuntime) applyUsersIncrementalLocked(users []agentprotocol.UserCredential) error {
+	nextGrouped, err := panelUsersByInbound(*r.config, users)
+	if err != nil {
 		return err
 	}
+	previousGrouped, err := panelUsersByInbound(*r.config, r.users)
+	if err != nil {
+		return err
+	}
+	previous := make(map[string]agentprotocol.UserCredential, len(r.users))
+	next := make(map[string]agentprotocol.UserCredential, len(users))
+	for _, user := range r.users {
+		previous[userKey(user)] = user
+	}
+	for _, user := range users {
+		next[userKey(user)] = user
+	}
+	removed := make(map[int64][]panel.UserInfo)
+	added := make(map[int64][]panel.UserInfo)
+	stale := make([]agentprotocol.UserCredential, 0)
+	for key, oldUser := range previous {
+		newUser, exists := next[key]
+		if exists && sameRuntimeCredential(oldUser, newUser) {
+			continue
+		}
+		if info, ok := panelUserByKey(previousGrouped[oldUser.InboundID], oldUser.SubscriberID); ok {
+			removed[oldUser.InboundID] = append(removed[oldUser.InboundID], info)
+			stale = append(stale, oldUser)
+		}
+	}
+	for key, newUser := range next {
+		oldUser, exists := previous[key]
+		if exists && sameRuntimeCredential(oldUser, newUser) {
+			continue
+		}
+		if info, ok := panelUserByKey(nextGrouped[newUser.InboundID], newUser.SubscriberID); ok {
+			added[newUser.InboundID] = append(added[newUser.InboundID], info)
+		}
+	}
+	if len(removed) == 0 && len(added) == 0 {
+		r.users = append([]agentprotocol.UserCredential(nil), users...)
+		return nil
+	}
+	if err := r.disconnectUsersLocked(stale); err != nil {
+		return err
+	}
+	for inboundID, removedUsers := range removed {
+		node, err := r.panelNodeForInbound(*r.config, findInbound(*r.config, inboundID))
+		if err != nil {
+			return err
+		}
+		tag := inboundTag(inboundID)
+		if err := r.active.DelUsers(removedUsers, tag, node); err != nil {
+			return fmt.Errorf("remove users from %s: %w", tag, err)
+		}
+		if limiter, err := r.active.LimiterManager.Get(tag); err == nil {
+			limiter.UpdateUser(tag, nil, removedUsers)
+		}
+	}
+	for inboundID, addedUsers := range added {
+		node, err := r.panelNodeForInbound(*r.config, findInbound(*r.config, inboundID))
+		if err != nil {
+			return err
+		}
+		tag := inboundTag(inboundID)
+		if _, err := r.active.AddUsers(&ppcore.AddUsersParams{Tag: tag, Users: addedUsers, NodeInfo: node}); err != nil {
+			return fmt.Errorf("add users to %s: %w", tag, err)
+		}
+		if limiter, err := r.active.LimiterManager.Get(tag); err == nil {
+			limiter.UpdateUser(tag, addedUsers, nil)
+		}
+	}
+	r.users = append([]agentprotocol.UserCredential(nil), users...)
+	return nil
+}
+
+func panelUserByKey(users []panel.UserInfo, subscriberID int64) (panel.UserInfo, bool) {
+	for _, user := range users {
+		if int64(user.Id) == subscriberID {
+			return user, true
+		}
+	}
+	return panel.UserInfo{}, false
+}
+
+func (r *XrayRuntime) rebuildUsersLocked(users []agentprotocol.UserCredential, incrementalErr error) error {
 	nodes, err := r.buildNodes(*r.config)
 	if err != nil {
 		return err
@@ -125,16 +259,16 @@ func (r *XrayRuntime) ApplyUsers(_ context.Context, users []agentprotocol.UserCr
 	r.active = nil
 	if closeErr != nil {
 		r.active, _ = r.startCore(nodes, *r.config, previousUsers)
-		return closeErr
+		return fmt.Errorf("incremental apply failed: %w; close fallback core: %v", incrementalErr, closeErr)
 	}
-	candidate, err := r.startCore(nodes, *r.config, users)
-	if err != nil {
+	candidate, rebuildErr := r.startCore(nodes, *r.config, users)
+	if rebuildErr != nil {
 		restored, restoreErr := r.startCore(nodes, *r.config, previousUsers)
 		r.active = restored
 		if restoreErr != nil {
-			return fmt.Errorf("apply users: %w; restore previous users: %v", err, restoreErr)
+			return fmt.Errorf("incremental apply failed: %w; rebuild: %v; restore previous users: %v", incrementalErr, rebuildErr, restoreErr)
 		}
-		return err
+		return fmt.Errorf("incremental apply failed: %w; rebuild: %v", incrementalErr, rebuildErr)
 	}
 	r.active = candidate
 	r.users = append([]agentprotocol.UserCredential(nil), users...)

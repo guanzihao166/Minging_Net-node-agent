@@ -21,6 +21,7 @@ type Runtime interface {
 	// without rebuilding the Xray core or touching other users.
 	DisconnectSubscribers(context.Context, []int64) error
 	ApplyUsers(context.Context, []agentprotocol.UserCredential) error
+	ApplyUserDelta(context.Context, agentprotocol.UserDelta) ([]agentprotocol.UserCredential, error)
 	CollectTraffic(context.Context) ([]state.TrafficDelta, error)
 	CollectAccess(context.Context) ([]agentprotocol.AccessItem, error)
 	RequeueAccess([]agentprotocol.AccessItem)

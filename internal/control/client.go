@@ -239,6 +239,10 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 			if err := c.applyUserSnapshot(sessionCtx, writer, envelope); err != nil {
 				c.logger.Warn("user snapshot rejected", "error", err)
 			}
+		case agentprotocol.TypeUserDelta:
+			if err := c.applyUserDelta(sessionCtx, writer, envelope); err != nil {
+				c.logger.Warn("user delta rejected", "error", err)
+			}
 		case agentprotocol.TypeUserDisconnect:
 			if err := c.applyUserDisconnect(sessionCtx, writer, envelope); err != nil {
 				c.logger.Warn("targeted user disconnect failed", "error", err)
@@ -556,11 +560,29 @@ func (c *Client) applyUserSnapshot(ctx context.Context, writer *sessionWriter, e
 		})
 		return err
 	}
-	storedSnapshot := snapshot
-	storedSnapshot.Users = append([]agentprotocol.UserCredential(nil), snapshot.Users...)
+	return c.persistAppliedUsers(ctx, snapshot.Revision, snapshot.Users, writer)
+}
+
+func (c *Client) applyUserDelta(ctx context.Context, writer *sessionWriter, envelope agentprotocol.Envelope) error {
+	var delta agentprotocol.UserDelta
+	if err := agentprotocol.DecodePayload(envelope, &delta); err != nil {
+		return err
+	}
+	c.runtimeSyncMu.Lock()
+	defer c.runtimeSyncMu.Unlock()
+	users, err := c.runtime.ApplyUserDelta(ctx, delta)
+	if err != nil {
+		_ = writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{Revision: delta.Revision, Status: "failed", ErrorCode: "user_delta_apply_failed", ErrorMessage: "runtime rejected user delta"})
+		return err
+	}
+	return c.persistAppliedUsers(ctx, delta.Revision, users, writer)
+}
+
+func (c *Client) persistAppliedUsers(ctx context.Context, revision uint64, users []agentprotocol.UserCredential, writer *sessionWriter) error {
+	storedSnapshot := agentprotocol.UserSnapshot{Revision: revision, Users: append([]agentprotocol.UserCredential(nil), users...)}
 	for index := range storedSnapshot.Users {
 		user := &storedSnapshot.Users[index]
-		secretRef := fmt.Sprintf("user-secret:%s_%d:%d:%d", normalizedCredentialKind(user.Kind), user.InboundID, user.SubscriberID, snapshot.Revision)
+		secretRef := fmt.Sprintf("user-secret:%s_%d:%d:%d", normalizedCredentialKind(user.Kind), user.InboundID, user.SubscriberID, revision)
 		if err := c.secrets.Put(secretRef, []byte(user.Value)); err != nil {
 			return err
 		}
@@ -569,7 +591,7 @@ func (c *Client) applyUserSnapshot(ctx context.Context, writer *sessionWriter, e
 	if err := c.store.ReplaceUsers(ctx, storedSnapshot); err != nil {
 		return err
 	}
-	return writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{Revision: snapshot.Revision, Status: "succeeded"})
+	return writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{Revision: revision, Status: "succeeded"})
 }
 
 func (c *Client) applyUserDisconnect(ctx context.Context, writer *sessionWriter, envelope agentprotocol.Envelope) error {

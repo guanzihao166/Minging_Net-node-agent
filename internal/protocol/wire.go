@@ -22,6 +22,7 @@ const (
 	TypeHeartbeat      = "heartbeat"
 	TypeHeartbeatAck   = "heartbeat_ack"
 	TypeUserSnapshot   = "user_snapshot"
+	TypeUserDelta      = "user_delta"
 	TypeUserDisconnect = "user_disconnect"
 	TypeUserResult     = "user_result"
 	TypeTrafficBatch   = "traffic_batch"
@@ -104,6 +105,17 @@ type UserCredential struct {
 type UserSnapshot struct {
 	Revision uint64           `json:"revision"`
 	Users    []UserCredential `json:"users"`
+}
+
+type UserDelta struct {
+	Revision uint64           `json:"revision"`
+	Upserts  []UserCredential `json:"upserts"`
+	Removals []UserReference  `json:"removals"`
+}
+
+type UserReference struct {
+	SubscriberID int64 `json:"subscriber_id"`
+	InboundID    int64 `json:"inbound_id"`
 }
 
 type UserDisconnect struct {
