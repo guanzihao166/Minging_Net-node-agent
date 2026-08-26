@@ -36,7 +36,18 @@ func (w *Writer) WriteMultiBuffer(mb buf.MultiBuffer) error {
 		limiter = w.resolve()
 	}
 	if limiter != nil {
-		limiter.Wait(int64(mb.Len()))
+		if w.resolve != nil && limiter.Capacity() == 1 {
+			// A capacity-one bucket is the active zero-allocation sentinel. Do
+			// not park an existing connection behind a full-buffer wait: poll the
+			// resolver once per 100ms so it picks up a newly assigned share.
+			for limiter != nil && limiter.Capacity() == 1 {
+				limiter.Wait(1)
+				limiter = w.resolve()
+			}
+		}
+		if limiter != nil {
+			limiter.Wait(int64(mb.Len()))
+		}
 	}
 	return w.writer.WriteMultiBuffer(mb)
 }

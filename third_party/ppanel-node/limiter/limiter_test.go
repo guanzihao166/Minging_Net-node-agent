@@ -173,6 +173,10 @@ func TestManagerAppliesControlPlaneBandwidthAllocation(t *testing.T) {
 	if current.SpeedBucket(taguuid) != allocated {
 		t.Fatal("unchanged allocation replaced the active bandwidth bucket")
 	}
+	manager.SetGlobalBandwidthAllocation(testUID, 0, true)
+	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 1 {
+		t.Fatalf("active zero allocation bucket = %#v", bucket)
+	}
 	manager.SetGlobalBandwidthAllocation(testUID, 0, false)
 	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 250_000 {
 		t.Fatalf("cleared allocation bucket = %#v", bucket)

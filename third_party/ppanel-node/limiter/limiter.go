@@ -112,12 +112,13 @@ func (m *Manager) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 }
 
 // SetGlobalBandwidthAllocation applies the control-plane share for one
-// subscriber. Clearing an allocation falls back to the local static policy.
+// subscriber. An active zero share pauses this Agent for the subscriber; only
+// an inactive allocation falls back to the local static policy.
 func (m *Manager) SetGlobalBandwidthAllocation(uid int, speedLimitBPS uint64, active bool) {
 	if uid <= 0 {
 		return
 	}
-	if !active || speedLimitBPS == 0 {
+	if !active {
 		if _, present := m.globalAllocated.Load(uid); !present {
 			return
 		}
@@ -340,7 +341,23 @@ func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket
 	}
 	limit := int64(rate) * 1_000_000 / 8
 	if allocated, ok := m.globalAllocated.Load(uid); ok {
-		limit = int64(allocated.(uint64))
+		allocatedLimit := allocated.(uint64)
+		if allocatedLimit == 0 {
+			// Keep the connection open but make its next write wait for a short
+			// control-plane polling interval. Dynamic writers re-resolve this
+			// bucket after each byte while paused, so a later allocation wakes
+			// within 100ms instead of inheriting the local static limit.
+			if value, ok := m.globalSpeed.Load(uid); ok {
+				if bucket, valid := value.(*ratelimit.Bucket); valid && bucket.Capacity() == 1 {
+					return bucket
+				}
+			}
+			bucket := ratelimit.NewBucketWithQuantum(100*time.Millisecond, 1, 1)
+			bucket.TakeAvailable(1)
+			m.globalSpeed.Store(uid, bucket)
+			return bucket
+		}
+		limit = int64(allocatedLimit)
 	}
 	if limit <= 0 {
 		m.globalSpeed.Delete(uid)
