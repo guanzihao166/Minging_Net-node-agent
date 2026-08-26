@@ -19,6 +19,7 @@ import (
 
 	"github.com/guanzihao166/iepl-node-agent/internal/config"
 	"github.com/guanzihao166/iepl-node-agent/internal/hostmetrics"
+	"github.com/guanzihao166/iepl-node-agent/internal/hostnetwork"
 	"github.com/guanzihao166/iepl-node-agent/internal/identity"
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 	agentruntime "github.com/guanzihao166/iepl-node-agent/internal/runtime"
@@ -109,6 +110,10 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 					t.Errorf("heartbeat system metrics = %#v", heartbeat.SystemMetrics)
 					return
 				}
+				if heartbeat.ReportedIPv4 != "198.51.100.17" || heartbeat.ReportedIPv6 != "2001:db8::17" {
+					t.Errorf("heartbeat addresses = %q, %q", heartbeat.ReportedIPv4, heartbeat.ReportedIPv6)
+					return
+				}
 				writeProtocolEnvelope(t, connection, agentprotocol.TypeHeartbeatAck, map[string]any{"ok": true})
 			case agentprotocol.TypeTrafficBatch:
 				var batch agentprotocol.TrafficBatch
@@ -158,6 +163,9 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 		MemoryUsedBytes: 3, MemoryTotalBytes: 8, NetworkReceiveBPS: 2048,
 		NetworkTransmitBPS: 1024, UptimeSeconds: 600,
 	}}
+	client.publicAddresses = func() hostnetwork.Addresses {
+		return hostnetwork.Addresses{IPv4: "198.51.100.17", IPv6: "2001:db8::17"}
+	}
 	established := make(chan struct{}, 1)
 	_ = client.runSessionWithEstablished(ctx, func() { established <- struct{}{} })
 	select {

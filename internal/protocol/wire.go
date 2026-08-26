@@ -70,6 +70,8 @@ type Heartbeat struct {
 	XrayRunning          bool           `json:"xray_running"`
 	XrayVersion          string         `json:"xray_version,omitempty"`
 	XrayCoreGeneration   uint64         `json:"xray_core_generation,omitempty"`
+	ReportedIPv4         string         `json:"reported_ipv4,omitempty"`
+	ReportedIPv6         string         `json:"reported_ipv6,omitempty"`
 	SystemMetrics        *SystemMetrics `json:"system_metrics,omitempty"`
 }
 

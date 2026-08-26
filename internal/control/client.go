@@ -19,6 +19,7 @@ import (
 
 	"github.com/guanzihao166/iepl-node-agent/internal/config"
 	"github.com/guanzihao166/iepl-node-agent/internal/hostmetrics"
+	"github.com/guanzihao166/iepl-node-agent/internal/hostnetwork"
 	"github.com/guanzihao166/iepl-node-agent/internal/identity"
 	"github.com/guanzihao166/iepl-node-agent/internal/maintenance"
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
@@ -44,6 +45,7 @@ type Client struct {
 	runtimeSyncMu          sync.RWMutex
 	lastUpdateCheck        time.Time
 	hostMetrics            hostMetricsSampler
+	publicAddresses        func() hostnetwork.Addresses
 	loadRuntimeState       func(context.Context) (state.RuntimeState, error)
 	trafficWindowStartedAt time.Time
 }
@@ -72,7 +74,7 @@ func New(cfg config.Config, id *identity.Identity, certificate tls.Certificate, 
 	return &Client{
 		cfg: cfg, identity: id, cert: certificate, signingKey: append(ed25519.PublicKey(nil), signingKey...),
 		store: store, secrets: secrets, runtime: runtime, logger: logger, bootID: uuid.NewString(), now: time.Now,
-		maintenance: maintenanceController, hostMetrics: hostmetrics.NewCollector(), loadRuntimeState: store.RuntimeState,
+		maintenance: maintenanceController, hostMetrics: hostmetrics.NewCollector(), publicAddresses: hostnetwork.PublicAddresses, loadRuntimeState: store.RuntimeState,
 	}, nil
 }
 
@@ -433,6 +435,10 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 					}
 				}
 			}
+			addresses := hostnetwork.Addresses{}
+			if c.publicAddresses != nil {
+				addresses = c.publicAddresses()
+			}
 			err = writer.send(agentprotocol.TypeHeartbeat, agentprotocol.Heartbeat{
 				SessionID:            sessionID,
 				AppliedConfigVersion: stateValue.AppliedConfigVersion,
@@ -440,6 +446,7 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				AppliedUserRevision:  stateValue.AppliedUserRevision,
 				WALPendingBatches:    pendingBatches, WALPendingBytes: pendingBytes,
 				XrayRunning: runtimeStatus.Running, XrayVersion: runtimeStatus.Version, XrayCoreGeneration: runtimeStatus.CoreGeneration,
+				ReportedIPv4: addresses.IPv4, ReportedIPv6: addresses.IPv6,
 				SystemMetrics: systemMetrics,
 			})
 			if err != nil {
