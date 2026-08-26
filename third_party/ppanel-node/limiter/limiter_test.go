@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"testing"
+	"time"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
 	"github.com/perfect-panel/ppanel-node/common/format"
@@ -156,6 +157,12 @@ func TestManagerSharesBandwidthBucketAcrossInbounds(t *testing.T) {
 	}
 	if available := firstBucket.Available(); available != 0 {
 		t.Fatalf("new bucket started with %d tokens, want 0", available)
+	}
+	if globalSpeedBurstWindow != 100*time.Millisecond || globalSpeedFillWindow != 10*time.Millisecond {
+		t.Fatalf("speed bucket timing = burst %s, fill %s", globalSpeedBurstWindow, globalSpeedFillWindow)
+	}
+	if rate := firstBucket.Rate(); rate != 2_500_000 {
+		t.Fatalf("20 Mbps bucket rate = %f, want 2500000 bytes/s", rate)
 	}
 }
 

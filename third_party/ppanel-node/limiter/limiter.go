@@ -23,6 +23,11 @@ type Manager struct {
 	pendingDemands   sync.Map // Key: subscriber ID, value: struct{}
 }
 
+const (
+	globalSpeedBurstWindow = 100 * time.Millisecond
+	globalSpeedFillWindow  = 10 * time.Millisecond
+)
+
 func NewManager() *Manager {
 	return &Manager{
 		limiters:         make(map[string]*Limiter),
@@ -400,18 +405,22 @@ func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket
 		m.globalSpeed.Delete(uid)
 		return nil
 	}
-	burst := limit / 10
+	burst := limit * int64(globalSpeedBurstWindow) / int64(time.Second)
 	if burst < 1 {
 		burst = 1
+	}
+	quantum := burst * int64(globalSpeedFillWindow) / int64(globalSpeedBurstWindow)
+	if quantum < 1 {
+		quantum = 1
 	}
 	if value, ok := m.globalSpeed.Load(uid); ok {
 		if bucket, valid := value.(*ratelimit.Bucket); valid && bucket.Capacity() == burst {
 			return bucket
 		}
 	}
-	bucket := ratelimit.NewBucketWithQuantum(100*time.Millisecond, burst, burst)
-	// A full initial bucket lets a sub-window file finish before any wait. Start
-	// empty so short transfers are also constrained by the configured rate.
+	bucket := ratelimit.NewBucketWithQuantum(globalSpeedFillWindow, burst, quantum)
+	// Start empty so short transfers remain constrained. The 10ms refill quantum
+	// avoids making a new connection wait a full 100ms burst window for its first write.
 	bucket.TakeAvailable(burst)
 	m.globalSpeed.Store(uid, bucket)
 	return bucket
