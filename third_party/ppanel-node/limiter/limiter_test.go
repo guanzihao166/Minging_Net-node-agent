@@ -113,7 +113,7 @@ func TestManagerSpeedBucketFollowsReplacedUserPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 2_500_000 {
+	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 250_000 {
 		t.Fatalf("20 Mbps bucket = %#v", bucket)
 	}
 
@@ -123,7 +123,7 @@ func TestManagerSpeedBucketFollowsReplacedUserPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 125_000 {
+	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 12_500 {
 		t.Fatalf("1 Mbps bucket = %#v", bucket)
 	}
 
@@ -135,5 +135,42 @@ func TestManagerSpeedBucketFollowsReplacedUserPolicy(t *testing.T) {
 	}
 	if bucket := current.SpeedBucket(taguuid); bucket != nil {
 		t.Fatalf("unlimited bucket = %#v", bucket)
+	}
+}
+
+func TestManagerSharesBandwidthBucketAcrossInbounds(t *testing.T) {
+	manager := NewManager()
+	first := manager.Add("inbound-1", []panel.UserInfo{{Id: testUID, Uuid: "user-a", SpeedLimit: 20}}, map[int]int{}, "vless")
+	second := manager.Add("inbound-2", []panel.UserInfo{{Id: testUID, Uuid: "user-b", SpeedLimit: 20}}, map[int]int{}, "trojan")
+
+	firstBucket := first.SpeedBucket(format.UserTag("inbound-1", "user-a"))
+	secondBucket := second.SpeedBucket(format.UserTag("inbound-2", "user-b"))
+	if firstBucket == nil || secondBucket == nil {
+		t.Fatal("expected shared bandwidth bucket")
+	}
+	if firstBucket != secondBucket {
+		t.Fatal("same subscriber received separate inbound bandwidth buckets")
+	}
+	if firstBucket.Capacity() != 250_000 {
+		t.Fatalf("100ms burst capacity = %d, want 250000", firstBucket.Capacity())
+	}
+}
+
+func TestManagerUpdateUserReplacesGlobalBandwidthPolicy(t *testing.T) {
+	manager := NewManager()
+	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
+	taguuid := format.UserTag(testTag, testUUID)
+	before := current.SpeedBucket(taguuid)
+	if before == nil || before.Capacity() != 250_000 {
+		t.Fatalf("initial bucket = %#v", before)
+	}
+
+	manager.UpdateUser(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 1}}, nil)
+	after := current.SpeedBucket(taguuid)
+	if after == nil || after.Capacity() != 12_500 {
+		t.Fatalf("updated bucket = %#v", after)
+	}
+	if after == before {
+		t.Fatal("policy update retained the stale bandwidth bucket")
 	}
 }

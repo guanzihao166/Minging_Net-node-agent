@@ -12,17 +12,24 @@ import (
 )
 
 type Manager struct {
-	lock     sync.RWMutex
-	limiters map[string]*Limiter
+	lock             sync.RWMutex
+	limiters         map[string]*Limiter
+	globalLock       sync.Mutex
+	globalUserLimits map[int]map[string]int
+	globalUserRates  sync.Map // Key: subscriber ID, value: effective Mbps
+	globalSpeed      sync.Map // Key: subscriber ID, value: *ratelimit.Bucket
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		limiters: make(map[string]*Limiter),
+		limiters:         make(map[string]*Limiter),
+		globalUserLimits: make(map[int]map[string]int),
 	}
 }
 
 type Limiter struct {
+	manager       *Manager
+	stateMu       sync.RWMutex
 	NodeType      string
 	SpeedLimit    int
 	UserOnlineIP  *sync.Map      // Key: TagUUID, value: {Key: Ip, value: Uid}
@@ -44,6 +51,7 @@ type UserLimitInfo struct {
 
 func (m *Manager) Add(tag string, users []panel.UserInfo, aliveList map[int]int, nodeType string) *Limiter {
 	info := &Limiter{
+		manager:       m,
 		NodeType:      nodeType,
 		UserOnlineIP:  new(sync.Map),
 		UserLimitInfo: new(sync.Map),
@@ -69,6 +77,9 @@ func (m *Manager) Add(tag string, users []panel.UserInfo, aliveList map[int]int,
 	m.lock.Lock()
 	m.limiters[tag] = info
 	m.lock.Unlock()
+	for i := range users {
+		m.updateGlobalUserLimit(tag, users[i], false)
+	}
 	return info
 }
 
@@ -86,9 +97,21 @@ func (m *Manager) Delete(tag string) {
 	m.lock.Lock()
 	delete(m.limiters, tag)
 	m.lock.Unlock()
+	m.removeGlobalTag(tag)
+}
+
+// UpdateUser refreshes an inbound policy without removing the Xray user or
+// closing its live links. Buckets are shared by subscriber ID across inbounds.
+func (m *Manager) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {
+	limiter, err := m.Get(tag)
+	if err != nil {
+		return
+	}
+	limiter.UpdateUser(tag, added, deleted)
 }
 
 func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {
+	l.stateMu.Lock()
 	for i := range deleted {
 		l.UserLimitInfo.Delete(format.UserTag(tag, deleted[i].Uuid))
 		l.UserOnlineIP.Delete(format.UserTag(tag, deleted[i].Uuid))
@@ -110,6 +133,16 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, added[i].Uuid), userLimit)
 		l.UUIDtoUID[added[i].Uuid] = added[i].Id
+	}
+	l.stateMu.Unlock()
+	if l.manager == nil {
+		return
+	}
+	for i := range deleted {
+		l.manager.updateGlobalUserLimit(tag, deleted[i], true)
+	}
+	for i := range added {
+		l.manager.updateGlobalUserLimit(tag, added[i], false)
 	}
 }
 
@@ -140,11 +173,14 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPSource bool) (Bucke
 	} else {
 		return nil, true
 	}
+	l.stateMu.RLock()
+	aliveIP := l.AliveList[uid]
+	l.stateMu.RUnlock()
 	if noUDPSource || l.NodeType == "hysteria" || l.NodeType == "hysteria2" || l.NodeType == "tuic" {
 		// Store online user for device limit
 		ipMap := new(sync.Map)
 		ipMap.Store(ip, uid)
-		aliveIp := l.AliveList[uid]
+		aliveIp := aliveIP
 		// If any device is online
 		if v, ok := l.UserOnlineIP.LoadOrStore(taguuid, ipMap); ok {
 			ipMap := v.(*sync.Map)
@@ -178,19 +214,15 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPSource bool) (Bucke
 // replaces a stale bucket when the effective byte rate changes, allowing
 // existing dynamic writers to observe a new limit immediately.
 func (l *Limiter) SpeedBucketWithLimits(taguuid string, nodeLimit, userLimit int) *ratelimit.Bucket {
-	limit := int64(determineSpeedLimit(nodeLimit, userLimit)) * 1000000 / 8
-	if limit <= 0 {
-		l.SpeedLimiter.Delete(taguuid)
+	if l.manager == nil {
 		return nil
 	}
-	if value, ok := l.SpeedLimiter.Load(taguuid); ok {
-		if bucket, valid := value.(*ratelimit.Bucket); valid && bucket.Capacity() == limit {
-			return bucket
-		}
+	value, ok := l.UserLimitInfo.Load(taguuid)
+	if !ok {
+		return nil
 	}
-	bucket := ratelimit.NewBucketWithQuantum(time.Second, limit, limit)
-	l.SpeedLimiter.Store(taguuid, bucket)
-	return bucket
+	user := value.(*UserLimitInfo)
+	return l.manager.globalSpeedBucket(user.UID, determineSpeedLimit(nodeLimit, userLimit))
 }
 
 // SpeedBucket resolves a user's current node and user policy without applying
@@ -215,6 +247,90 @@ func (l *Limiter) SpeedBucket(taguuid string) *ratelimit.Bucket {
 		return nil
 	}
 	return l.SpeedBucketWithLimits(taguuid, nodeLimit, userLimit)
+}
+
+func (m *Manager) updateGlobalUserLimit(tag string, user panel.UserInfo, remove bool) {
+	if user.Id <= 0 {
+		return
+	}
+	key := format.UserTag(tag, user.Uuid)
+	m.globalLock.Lock()
+	entries := m.globalUserLimits[user.Id]
+	if entries == nil {
+		entries = make(map[string]int)
+		m.globalUserLimits[user.Id] = entries
+	}
+	if remove {
+		delete(entries, key)
+	} else {
+		entries[key] = user.SpeedLimit
+	}
+	m.refreshGlobalUserRateLocked(user.Id)
+	m.globalLock.Unlock()
+}
+
+func (m *Manager) removeGlobalTag(tag string) {
+	prefix := tag + "|"
+	m.globalLock.Lock()
+	for uid, entries := range m.globalUserLimits {
+		for key := range entries {
+			if strings.HasPrefix(key, prefix) {
+				delete(entries, key)
+			}
+		}
+		m.refreshGlobalUserRateLocked(uid)
+	}
+	m.globalLock.Unlock()
+}
+
+func (m *Manager) refreshGlobalUserRateLocked(uid int) {
+	entries := m.globalUserLimits[uid]
+	if len(entries) == 0 {
+		delete(m.globalUserLimits, uid)
+		m.globalUserRates.Delete(uid)
+		m.globalSpeed.Delete(uid)
+		return
+	}
+	rate := 0
+	for _, candidate := range entries {
+		rate = determineSpeedLimit(rate, candidate)
+	}
+	if rate <= 0 {
+		m.globalUserRates.Delete(uid)
+		m.globalSpeed.Delete(uid)
+		return
+	}
+	m.globalUserRates.Store(uid, rate)
+}
+
+// globalSpeedBucket returns the one bandwidth budget consumed by every active
+// protocol and inbound for a subscriber on this Agent. Its capacity is 100ms
+// of traffic, keeping policy-change and connection-start bursts bounded.
+func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket {
+	if uid <= 0 {
+		return nil
+	}
+	rate := fallbackRate
+	if stored, ok := m.globalUserRates.Load(uid); ok {
+		rate = stored.(int)
+	}
+	limit := int64(rate) * 1_000_000 / 8
+	if limit <= 0 {
+		m.globalSpeed.Delete(uid)
+		return nil
+	}
+	burst := limit / 10
+	if burst < 1 {
+		burst = 1
+	}
+	if value, ok := m.globalSpeed.Load(uid); ok {
+		if bucket, valid := value.(*ratelimit.Bucket); valid && bucket.Capacity() == burst {
+			return bucket
+		}
+	}
+	bucket := ratelimit.NewBucketWithQuantum(100*time.Millisecond, burst, burst)
+	m.globalSpeed.Store(uid, bucket)
+	return bucket
 }
 
 func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {

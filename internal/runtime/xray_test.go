@@ -138,10 +138,11 @@ func TestSS2022StandardKeysCompleteTCPRoundTrip(t *testing.T) {
 			if err := runtime.ApplyConfig(context.Background(), desired); err != nil {
 				t.Fatalf("ApplyConfig: %v", err)
 			}
-			if err := runtime.ApplyUsers(context.Background(), []agentprotocol.UserCredential{{
+			users := []agentprotocol.UserCredential{{
 				SubscriberID: 501, InboundID: 51, Kind: "key",
 				Value: base64.StdEncoding.EncodeToString(userKey),
-			}}); err != nil {
+			}}
+			if err := runtime.ApplyUsers(context.Background(), users); err != nil {
 				t.Fatalf("ApplyUsers: %v", err)
 			}
 
@@ -159,17 +160,22 @@ func TestSS2022StandardKeysCompleteTCPRoundTrip(t *testing.T) {
 				}
 				defer connection.Close()
 				_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
-				request := make([]byte, 4)
-				if _, err := io.ReadFull(connection, request); err != nil {
-					targetResult <- err
-					return
+				for range 2 {
+					request := make([]byte, 4)
+					if _, err := io.ReadFull(connection, request); err != nil {
+						targetResult <- err
+						return
+					}
+					if string(request) != "ping" {
+						targetResult <- fmt.Errorf("target request = %q", request)
+						return
+					}
+					if _, err := connection.Write([]byte("pong")); err != nil {
+						targetResult <- err
+						return
+					}
 				}
-				if string(request) != "ping" {
-					targetResult <- fmt.Errorf("target request = %q", request)
-					return
-				}
-				_, err = connection.Write([]byte("pong"))
-				targetResult <- err
+				targetResult <- nil
 			}()
 
 			transport, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", desired.Inbounds[0].Port), 5*time.Second)
@@ -197,6 +203,19 @@ func TestSS2022StandardKeysCompleteTCPRoundTrip(t *testing.T) {
 			}
 			if string(response) != "pong" {
 				t.Fatalf("response = %q", response)
+			}
+			users[0].SpeedLimitBPS = 1_000_000
+			if err := runtime.ApplyUsers(context.Background(), users); err != nil {
+				t.Fatalf("ApplyUsers policy update: %v", err)
+			}
+			if _, err := connection.Write([]byte("ping")); err != nil {
+				t.Fatalf("write after bandwidth update: %v", err)
+			}
+			if _, err := io.ReadFull(connection, response); err != nil {
+				t.Fatalf("read after bandwidth update: %v", err)
+			}
+			if string(response) != "pong" {
+				t.Fatalf("response after bandwidth update = %q", response)
 			}
 			if err := <-targetResult; err != nil {
 				t.Fatal(err)
@@ -351,6 +370,21 @@ func TestApplyUsersUpdatesOneUserWithoutRestartingCore(t *testing.T) {
 	limit := item.(*limiter.UserLimitInfo)
 	if limit.SpeedLimit != 40 || limit.DeviceLimit != 4 {
 		t.Fatalf("limiter policy = %#v", limit)
+	}
+	if bucket := userLimiter.SpeedBucket(inboundTag(desired.Inbounds[0].ID) + "|" + users[0].Value); bucket == nil || bucket.Capacity() != 500_000 {
+		t.Fatalf("updated 40 Mbps 100ms bucket = %#v", bucket)
+	}
+}
+
+func TestRuntimeIdentityTreatsBandwidthAsPolicyOnly(t *testing.T) {
+	base := agentprotocol.UserCredential{Kind: "uuid", Value: "value", ExpiresAt: 10, QuotaGeneration: 2, SpeedLimitBPS: 1_000_000}
+	updated := base
+	updated.SpeedLimitBPS = 5_000_000
+	if !sameRuntimeIdentity(base, updated) {
+		t.Fatal("bandwidth-only update changed runtime identity")
+	}
+	if sameRuntimePolicy(base, updated) {
+		t.Fatal("bandwidth-only update was not recognized as a policy change")
 	}
 }
 

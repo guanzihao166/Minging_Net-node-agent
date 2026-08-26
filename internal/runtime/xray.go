@@ -186,10 +186,11 @@ func (r *XrayRuntime) applyUsersIncrementalLocked(users []agentprotocol.UserCred
 	}
 	removed := make(map[int64][]panel.UserInfo)
 	added := make(map[int64][]panel.UserInfo)
+	policyUpdates := make(map[int64][]panel.UserInfo)
 	stale := make([]agentprotocol.UserCredential, 0)
 	for key, oldUser := range previous {
 		newUser, exists := next[key]
-		if exists && sameRuntimeCredential(oldUser, newUser) {
+		if exists && sameRuntimeIdentity(oldUser, newUser) {
 			continue
 		}
 		if info, ok := panelUserByKey(previousGrouped[oldUser.InboundID], oldUser.SubscriberID); ok {
@@ -199,14 +200,19 @@ func (r *XrayRuntime) applyUsersIncrementalLocked(users []agentprotocol.UserCred
 	}
 	for key, newUser := range next {
 		oldUser, exists := previous[key]
-		if exists && sameRuntimeCredential(oldUser, newUser) {
+		if exists && sameRuntimeIdentity(oldUser, newUser) {
+			if !sameRuntimePolicy(oldUser, newUser) {
+				if info, ok := panelUserByKey(nextGrouped[newUser.InboundID], newUser.SubscriberID); ok {
+					policyUpdates[newUser.InboundID] = append(policyUpdates[newUser.InboundID], info)
+				}
+			}
 			continue
 		}
 		if info, ok := panelUserByKey(nextGrouped[newUser.InboundID], newUser.SubscriberID); ok {
 			added[newUser.InboundID] = append(added[newUser.InboundID], info)
 		}
 	}
-	if len(removed) == 0 && len(added) == 0 {
+	if len(removed) == 0 && len(added) == 0 && len(policyUpdates) == 0 {
 		r.users = append([]agentprotocol.UserCredential(nil), users...)
 		return nil
 	}
@@ -222,8 +228,8 @@ func (r *XrayRuntime) applyUsersIncrementalLocked(users []agentprotocol.UserCred
 		if err := r.active.DelUsers(removedUsers, tag, node); err != nil {
 			return fmt.Errorf("remove users from %s: %w", tag, err)
 		}
-		if limiter, err := r.active.LimiterManager.Get(tag); err == nil {
-			limiter.UpdateUser(tag, nil, removedUsers)
+		if _, err := r.active.LimiterManager.Get(tag); err == nil {
+			r.active.LimiterManager.UpdateUser(tag, nil, removedUsers)
 		}
 	}
 	for inboundID, addedUsers := range added {
@@ -235,8 +241,14 @@ func (r *XrayRuntime) applyUsersIncrementalLocked(users []agentprotocol.UserCred
 		if _, err := r.active.AddUsers(&ppcore.AddUsersParams{Tag: tag, Users: addedUsers, NodeInfo: node}); err != nil {
 			return fmt.Errorf("add users to %s: %w", tag, err)
 		}
-		if limiter, err := r.active.LimiterManager.Get(tag); err == nil {
-			limiter.UpdateUser(tag, addedUsers, nil)
+		if _, err := r.active.LimiterManager.Get(tag); err == nil {
+			r.active.LimiterManager.UpdateUser(tag, addedUsers, nil)
+		}
+	}
+	for inboundID, updatedUsers := range policyUpdates {
+		tag := inboundTag(inboundID)
+		if _, err := r.active.LimiterManager.Get(tag); err == nil {
+			r.active.LimiterManager.UpdateUser(tag, updatedUsers, nil)
 		}
 	}
 	r.users = append([]agentprotocol.UserCredential(nil), users...)
@@ -286,9 +298,8 @@ func (r *XrayRuntime) rebuildUsersLocked(users []agentprotocol.UserCredential, i
 }
 
 // DisconnectUsers explicitly tears down links for credentials that disappear
-// or change in the next snapshot. ApplyUsers still rebuilds the core afterward;
-// this step makes revocation and quota-generation changes take effect before
-// the new runtime is started instead of relying on Xray's core close timing.
+// or whose authentication state changes. Policy-only changes stay connected and
+// are applied by the dynamic bandwidth limiter.
 func (r *XrayRuntime) DisconnectUsers(_ context.Context, nextUsers []agentprotocol.UserCredential) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -303,7 +314,7 @@ func (r *XrayRuntime) DisconnectUsers(_ context.Context, nextUsers []agentprotoc
 	stale := make([]agentprotocol.UserCredential, 0)
 	for _, previous := range r.users {
 		current, ok := next[userKey(previous)]
-		if !ok || !sameRuntimeCredential(previous, current) {
+		if !ok || !sameRuntimeIdentity(previous, current) {
 			stale = append(stale, previous)
 		}
 	}
@@ -369,9 +380,16 @@ func userKey(user agentprotocol.UserCredential) string {
 }
 
 func sameRuntimeCredential(left, right agentprotocol.UserCredential) bool {
+	return sameRuntimeIdentity(left, right) && sameRuntimePolicy(left, right)
+}
+
+func sameRuntimeIdentity(left, right agentprotocol.UserCredential) bool {
 	return left.Kind == right.Kind && left.Value == right.Value &&
-		left.ExpiresAt == right.ExpiresAt && left.SpeedLimitBPS == right.SpeedLimitBPS &&
-		left.DeviceLimit == right.DeviceLimit && left.QuotaGeneration == right.QuotaGeneration
+		left.ExpiresAt == right.ExpiresAt && left.QuotaGeneration == right.QuotaGeneration
+}
+
+func sameRuntimePolicy(left, right agentprotocol.UserCredential) bool {
+	return left.SpeedLimitBPS == right.SpeedLimitBPS && left.DeviceLimit == right.DeviceLimit
 }
 
 func findInbound(desired agentprotocol.DesiredConfig, id int64) agentprotocol.Inbound {
