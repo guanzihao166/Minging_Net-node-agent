@@ -68,10 +68,11 @@ type Inbound struct {
 }
 
 type Transport struct {
-	Type        string `json:"type"`
-	Path        string `json:"path,omitempty"`
-	Host        string `json:"host,omitempty"`
-	ServiceName string `json:"service_name,omitempty"`
+	Type                string `json:"type"`
+	Path                string `json:"path,omitempty"`
+	Host                string `json:"host,omitempty"`
+	ServiceName         string `json:"service_name,omitempty"`
+	AcceptProxyProtocol bool   `json:"accept_proxy_protocol,omitempty"`
 }
 
 type SecurityProfile struct {
@@ -298,6 +299,9 @@ func validateInbound(inbound Inbound, profile SecurityProfile, hasProfile bool) 
 	if inbound.TrafficMultiplierMilli <= 0 || inbound.TrafficMultiplierMilli > 100000 {
 		return errors.New("traffic multiplier is outside 0.001x..100x")
 	}
+	if err := validateProxyProtocol(inbound); err != nil {
+		return err
+	}
 	switch inbound.Protocol {
 	case ProtocolVLESS:
 		return validateVLESS(inbound, profile, hasProfile)
@@ -314,6 +318,19 @@ func validateInbound(inbound Inbound, profile SecurityProfile, hasProfile bool) 
 	default:
 		return fmt.Errorf("unsupported protocol %q", inbound.Protocol)
 	}
+}
+
+func validateProxyProtocol(inbound Inbound) error {
+	if !inbound.Transport.AcceptProxyProtocol {
+		return nil
+	}
+	if inbound.Transport.Type != TransportTCP && inbound.Transport.Type != TransportWebSocket {
+		return errors.New("proxy protocol requires tcp or websocket transport")
+	}
+	if inbound.Protocol == ProtocolSS2022 && (inbound.SS2022 == nil || inbound.SS2022.Network != "tcp") {
+		return errors.New("proxy protocol requires shadowsocks2022 tcp-only network")
+	}
+	return nil
 }
 
 func validateVLESS(inbound Inbound, profile SecurityProfile, hasProfile bool) error {

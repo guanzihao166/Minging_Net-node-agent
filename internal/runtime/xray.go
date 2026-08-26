@@ -576,7 +576,7 @@ func (r *XrayRuntime) panelNodeForInbound(desired agentprotocol.DesiredConfig, i
 	protocol := panel.Protocol{
 		Port: inbound.Port, Enable: inbound.Enabled, Transport: inbound.Transport.Type,
 		Host: inbound.Transport.Host, Path: inbound.Transport.Path,
-		ServiceName: inbound.Transport.ServiceName,
+		ServiceName: inbound.Transport.ServiceName, AcceptProxyProtocol: inbound.Transport.AcceptProxyProtocol,
 	}
 	info := &panel.NodeInfo{Id: int(inbound.ID), PushInterval: 60, PullInterval: 315360000, Protocol: &protocol}
 	switch inbound.Protocol {

@@ -75,6 +75,33 @@ func TestBuildsAllRequiredXrayProtocolFamilies(t *testing.T) {
 	}
 }
 
+func TestProxyProtocolIsMappedToXrayInbound(t *testing.T) {
+	secrets := testRuntimeSecrets(t)
+	runtime, err := NewXray(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	desired := testDesiredConfig()
+	desired.Inbounds[0].Transport.AcceptProxyProtocol = true
+	if err := agentprotocol.ValidateDesiredConfig(desired); err != nil {
+		t.Fatalf("valid proxy protocol config rejected: %v", err)
+	}
+	node, err := runtime.panelNodeForInbound(desired, desired.Inbounds[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !node.Protocol.AcceptProxyProtocol {
+		t.Fatal("AcceptProxyProtocol was not passed to the Xray inbound")
+	}
+
+	desired = testDesiredConfig()
+	desired.Inbounds[5].Transport.AcceptProxyProtocol = true
+	if err := agentprotocol.ValidateDesiredConfig(desired); err == nil {
+		t.Fatal("gRPC proxy protocol configuration was accepted")
+	}
+}
+
 func TestSS2022NormalizesLegacyAndRawServerKeyMaterial(t *testing.T) {
 	rawKey := bytes.Repeat([]byte{0x5a}, 32)
 	for name, material := range map[string][]byte{
