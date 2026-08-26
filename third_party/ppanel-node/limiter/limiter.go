@@ -19,12 +19,48 @@ type Manager struct {
 	globalUserRates  sync.Map // Key: subscriber ID, value: effective Mbps
 	globalAllocated  sync.Map // Key: subscriber ID, value: allocated BPS
 	globalSpeed      sync.Map // Key: subscriber ID, value: *ratelimit.Bucket
+	bandwidthDemands chan int
+	pendingDemands   sync.Map // Key: subscriber ID, value: struct{}
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		limiters:         make(map[string]*Limiter),
 		globalUserLimits: make(map[int]map[string]int),
+		bandwidthDemands: make(chan int, 1024),
+	}
+}
+
+// DrainBandwidthDemands returns each zero-allocation subscriber at most once.
+// It is a control-plane hint only and never affects traffic accounting.
+func (m *Manager) DrainBandwidthDemands(max int) []int {
+	if m == nil || max <= 0 {
+		return nil
+	}
+	result := make([]int, 0, max)
+	for len(result) < max {
+		select {
+		case uid := <-m.bandwidthDemands:
+			m.pendingDemands.Delete(uid)
+			result = append(result, uid)
+		default:
+			return result
+		}
+	}
+	return result
+}
+
+func (m *Manager) signalBandwidthDemand(uid int) {
+	if m == nil || uid <= 0 {
+		return
+	}
+	if _, loaded := m.pendingDemands.LoadOrStore(uid, struct{}{}); loaded {
+		return
+	}
+	select {
+	case m.bandwidthDemands <- uid:
+	default:
+		m.pendingDemands.Delete(uid)
 	}
 }
 
@@ -343,6 +379,7 @@ func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket
 	if allocated, ok := m.globalAllocated.Load(uid); ok {
 		allocatedLimit := allocated.(uint64)
 		if allocatedLimit == 0 {
+			m.signalBandwidthDemand(uid)
 			// Keep the connection open but make its next write wait for a short
 			// control-plane polling interval. Dynamic writers re-resolve this
 			// bucket after each byte while paused, so a later allocation wakes

@@ -356,6 +356,8 @@ func (f *fakeRuntime) ApplyBandwidthAllocation(context.Context, agentprotocol.Ba
 	return nil
 }
 
+func (f *fakeRuntime) DrainBandwidthDemands(context.Context) []int64 { return nil }
+
 func (f *fakeRuntime) DisconnectUsers(context.Context, []agentprotocol.UserCredential) error {
 	f.mu.Lock()
 	f.disconnects++

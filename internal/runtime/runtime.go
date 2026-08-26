@@ -24,6 +24,7 @@ type Runtime interface {
 	ApplyUsers(context.Context, []agentprotocol.UserCredential) error
 	ApplyUserDelta(context.Context, agentprotocol.UserDelta) ([]agentprotocol.UserCredential, error)
 	ApplyBandwidthAllocation(context.Context, agentprotocol.BandwidthAllocation) error
+	DrainBandwidthDemands(context.Context) []int64
 	CollectTraffic(context.Context) ([]state.TrafficDelta, error)
 	CollectAccess(context.Context) ([]agentprotocol.AccessItem, error)
 	RequeueAccess([]agentprotocol.AccessItem)

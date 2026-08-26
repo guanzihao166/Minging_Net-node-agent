@@ -31,6 +31,7 @@ const (
 	TypeAccessAck           = "access_ack"
 	TypeOnlineSnapshot      = "online_snapshot"
 	TypeBandwidthAllocation = "bandwidth_allocation"
+	TypeBandwidthDemand     = "bandwidth_demand"
 	TypeError               = "error"
 )
 
@@ -244,6 +245,13 @@ type SubscriberBandwidthAllocation struct {
 	SubscriberID     int64  `json:"subscriber_id"`
 	SpeedLimitBPS    uint64 `json:"speed_limit_bps"`
 	AllocationActive bool   `json:"allocation_active"`
+}
+
+// BandwidthDemand is emitted only when an Agent with an active zero allocation
+// sees the subscriber begin to write data. It bypasses the next traffic WAL
+// tick without changing accounting data.
+type BandwidthDemand struct {
+	SubscriberIDs []int64 `json:"subscriber_ids"`
 }
 
 type OnlineUser struct {

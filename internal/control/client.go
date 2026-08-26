@@ -398,9 +398,11 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 	heartbeatTicker := time.NewTicker(c.cfg.HeartbeatInterval)
 	trafficTicker := time.NewTicker(c.cfg.TrafficInterval)
 	accessTicker := time.NewTicker(c.cfg.AccessInterval)
+	demandTicker := time.NewTicker(100 * time.Millisecond)
 	defer heartbeatTicker.Stop()
 	defer trafficTicker.Stop()
 	defer accessTicker.Stop()
+	defer demandTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -466,12 +468,27 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				sendSessionError(errCh, err)
 				return
 			}
+		case <-demandTicker.C:
+			if err := c.collectAndSendBandwidthDemand(ctx, writer); err != nil {
+				sendSessionError(errCh, err)
+				return
+			}
 		case <-accessTicker.C:
 			if err := c.collectAndSendAccess(ctx, writer); err != nil {
 				c.logger.Warn("collect or send access WAL", "error", err)
 			}
 		}
 	}
+}
+
+func (c *Client) collectAndSendBandwidthDemand(ctx context.Context, writer *sessionWriter) error {
+	c.runtimeSyncMu.RLock()
+	subscriberIDs := c.runtime.DrainBandwidthDemands(ctx)
+	c.runtimeSyncMu.RUnlock()
+	if len(subscriberIDs) == 0 {
+		return nil
+	}
+	return writer.send(agentprotocol.TypeBandwidthDemand, agentprotocol.BandwidthDemand{SubscriberIDs: subscriberIDs})
 }
 
 func (c *Client) collectAndSendOnline(ctx context.Context, writer *sessionWriter) error {

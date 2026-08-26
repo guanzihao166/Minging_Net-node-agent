@@ -141,6 +141,24 @@ func (r *XrayRuntime) ApplyBandwidthAllocation(_ context.Context, allocation age
 	return nil
 }
 
+// DrainBandwidthDemands exposes zero-allocation write attempts without
+// rebuilding Xray or collecting a traffic batch.
+func (r *XrayRuntime) DrainBandwidthDemands(_ context.Context) []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active == nil || r.active.LimiterManager == nil {
+		return nil
+	}
+	demands := r.active.LimiterManager.DrainBandwidthDemands(256)
+	result := make([]int64, 0, len(demands))
+	for _, subscriberID := range demands {
+		if subscriberID > 0 {
+			result = append(result, int64(subscriberID))
+		}
+	}
+	return result
+}
+
 func (r *XrayRuntime) ApplyUserDelta(_ context.Context, delta agentprotocol.UserDelta) ([]agentprotocol.UserCredential, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

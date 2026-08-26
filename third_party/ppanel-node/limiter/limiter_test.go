@@ -183,6 +183,24 @@ func TestManagerAppliesControlPlaneBandwidthAllocation(t *testing.T) {
 	}
 }
 
+func TestManagerSignalsZeroAllocationDemandOnceUntilDrained(t *testing.T) {
+	manager := NewManager()
+	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
+	taguuid := format.UserTag(testTag, testUUID)
+	manager.SetGlobalBandwidthAllocation(testUID, 0, true)
+	_ = current.SpeedBucket(taguuid)
+	_ = current.SpeedBucket(taguuid)
+	demands := manager.DrainBandwidthDemands(8)
+	if len(demands) != 1 || demands[0] != testUID {
+		t.Fatalf("initial demands = %#v", demands)
+	}
+	_ = current.SpeedBucket(taguuid)
+	demands = manager.DrainBandwidthDemands(8)
+	if len(demands) != 1 || demands[0] != testUID {
+		t.Fatalf("demand after drain = %#v", demands)
+	}
+}
+
 func TestManagerUpdateUserReplacesGlobalBandwidthPolicy(t *testing.T) {
 	manager := NewManager()
 	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
