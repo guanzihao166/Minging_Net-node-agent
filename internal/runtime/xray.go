@@ -127,6 +127,20 @@ func (r *XrayRuntime) ApplyUsers(_ context.Context, users []agentprotocol.UserCr
 	}
 }
 
+// ApplyBandwidthAllocation updates only the shared limiter budget. It leaves
+// the Xray user manager and every live data-plane link untouched.
+func (r *XrayRuntime) ApplyBandwidthAllocation(_ context.Context, allocation agentprotocol.BandwidthAllocation) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active == nil {
+		return nil
+	}
+	for _, item := range allocation.Allocations {
+		r.active.LimiterManager.SetGlobalBandwidthAllocation(int(item.SubscriberID), item.SpeedLimitBPS, item.AllocationActive)
+	}
+	return nil
+}
+
 func (r *XrayRuntime) ApplyUserDelta(_ context.Context, delta agentprotocol.UserDelta) ([]agentprotocol.UserCredential, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -15,22 +15,23 @@ import (
 const ProtocolVersion = 1
 
 const (
-	TypeHello          = "hello"
-	TypeHelloAck       = "hello_ack"
-	TypeDesiredConfig  = "desired_config"
-	TypeConfigResult   = "config_result"
-	TypeHeartbeat      = "heartbeat"
-	TypeHeartbeatAck   = "heartbeat_ack"
-	TypeUserSnapshot   = "user_snapshot"
-	TypeUserDelta      = "user_delta"
-	TypeUserDisconnect = "user_disconnect"
-	TypeUserResult     = "user_result"
-	TypeTrafficBatch   = "traffic_batch"
-	TypeTrafficAck     = "traffic_ack"
-	TypeAccessBatch    = "access_batch"
-	TypeAccessAck      = "access_ack"
-	TypeOnlineSnapshot = "online_snapshot"
-	TypeError          = "error"
+	TypeHello               = "hello"
+	TypeHelloAck            = "hello_ack"
+	TypeDesiredConfig       = "desired_config"
+	TypeConfigResult        = "config_result"
+	TypeHeartbeat           = "heartbeat"
+	TypeHeartbeatAck        = "heartbeat_ack"
+	TypeUserSnapshot        = "user_snapshot"
+	TypeUserDelta           = "user_delta"
+	TypeUserDisconnect      = "user_disconnect"
+	TypeUserResult          = "user_result"
+	TypeTrafficBatch        = "traffic_batch"
+	TypeTrafficAck          = "traffic_ack"
+	TypeAccessBatch         = "access_batch"
+	TypeAccessAck           = "access_ack"
+	TypeOnlineSnapshot      = "online_snapshot"
+	TypeBandwidthAllocation = "bandwidth_allocation"
+	TypeError               = "error"
 )
 
 type Envelope struct {
@@ -231,6 +232,18 @@ func AccessPayloadSHA256(batch AccessBatch) (string, error) {
 type OnlineSnapshot struct {
 	CapturedAt time.Time    `json:"captured_at"`
 	Users      []OnlineUser `json:"users"`
+}
+
+// BandwidthAllocation distributes one subscriber's total bandwidth across the
+// Agent nodes where that subscriber currently has live links.
+type BandwidthAllocation struct {
+	Allocations []SubscriberBandwidthAllocation `json:"allocations"`
+}
+
+type SubscriberBandwidthAllocation struct {
+	SubscriberID     int64  `json:"subscriber_id"`
+	SpeedLimitBPS    uint64 `json:"speed_limit_bps"`
+	AllocationActive bool   `json:"allocation_active"`
 }
 
 type OnlineUser struct {

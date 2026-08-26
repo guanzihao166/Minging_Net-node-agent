@@ -154,6 +154,29 @@ func TestManagerSharesBandwidthBucketAcrossInbounds(t *testing.T) {
 	if firstBucket.Capacity() != 250_000 {
 		t.Fatalf("100ms burst capacity = %d, want 250000", firstBucket.Capacity())
 	}
+	if available := firstBucket.Available(); available != 0 {
+		t.Fatalf("new bucket started with %d tokens, want 0", available)
+	}
+}
+
+func TestManagerAppliesControlPlaneBandwidthAllocation(t *testing.T) {
+	manager := NewManager()
+	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
+	taguuid := format.UserTag(testTag, testUUID)
+	manager.SetGlobalBandwidthAllocation(testUID, 1_250_000, true)
+	allocated := current.SpeedBucket(taguuid)
+	if allocated == nil || allocated.Capacity() != 125_000 {
+		bucket := allocated
+		t.Fatalf("allocated 10 Mbps bucket = %#v", bucket)
+	}
+	manager.SetGlobalBandwidthAllocation(testUID, 1_250_000, true)
+	if current.SpeedBucket(taguuid) != allocated {
+		t.Fatal("unchanged allocation replaced the active bandwidth bucket")
+	}
+	manager.SetGlobalBandwidthAllocation(testUID, 0, false)
+	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 250_000 {
+		t.Fatalf("cleared allocation bucket = %#v", bucket)
+	}
 }
 
 func TestManagerUpdateUserReplacesGlobalBandwidthPolicy(t *testing.T) {

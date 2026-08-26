@@ -249,6 +249,10 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 			if err := c.applyUserDisconnect(sessionCtx, writer, envelope); err != nil {
 				c.logger.Warn("targeted user disconnect failed", "error", err)
 			}
+		case agentprotocol.TypeBandwidthAllocation:
+			if err := c.applyBandwidthAllocation(sessionCtx, envelope); err != nil {
+				c.logger.Warn("bandwidth allocation rejected", "error", err)
+			}
 		case agentprotocol.TypeTrafficAck:
 			var ack agentprotocol.TrafficAck
 			if err := agentprotocol.DecodePayload(envelope, &ack); err != nil {
@@ -613,6 +617,16 @@ func (c *Client) applyUserDisconnect(ctx context.Context, writer *sessionWriter,
 		return err
 	}
 	return writer.send(agentprotocol.TypeUserResult, agentprotocol.UserResult{Status: "succeeded"})
+}
+
+func (c *Client) applyBandwidthAllocation(ctx context.Context, envelope agentprotocol.Envelope) error {
+	var allocation agentprotocol.BandwidthAllocation
+	if err := agentprotocol.DecodePayload(envelope, &allocation); err != nil {
+		return err
+	}
+	c.runtimeSyncMu.Lock()
+	defer c.runtimeSyncMu.Unlock()
+	return c.runtime.ApplyBandwidthAllocation(ctx, allocation)
 }
 
 func normalizedCredentialKind(value string) string {

@@ -17,6 +17,7 @@ type Manager struct {
 	globalLock       sync.Mutex
 	globalUserLimits map[int]map[string]int
 	globalUserRates  sync.Map // Key: subscriber ID, value: effective Mbps
+	globalAllocated  sync.Map // Key: subscriber ID, value: allocated BPS
 	globalSpeed      sync.Map // Key: subscriber ID, value: *ratelimit.Bucket
 }
 
@@ -108,6 +109,28 @@ func (m *Manager) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		return
 	}
 	limiter.UpdateUser(tag, added, deleted)
+}
+
+// SetGlobalBandwidthAllocation applies the control-plane share for one
+// subscriber. Clearing an allocation falls back to the local static policy.
+func (m *Manager) SetGlobalBandwidthAllocation(uid int, speedLimitBPS uint64, active bool) {
+	if uid <= 0 {
+		return
+	}
+	if !active || speedLimitBPS == 0 {
+		if _, present := m.globalAllocated.Load(uid); !present {
+			return
+		}
+		m.globalAllocated.Delete(uid)
+	} else {
+		if current, present := m.globalAllocated.Load(uid); present && current.(uint64) == speedLimitBPS {
+			return
+		}
+		m.globalAllocated.Store(uid, speedLimitBPS)
+	}
+	// Dynamic writers resolve the bucket for every write. Removing the current
+	// bucket makes the next write pick up the new allocation without a reconnect.
+	m.globalSpeed.Delete(uid)
 }
 
 func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {
@@ -288,6 +311,7 @@ func (m *Manager) refreshGlobalUserRateLocked(uid int) {
 	if len(entries) == 0 {
 		delete(m.globalUserLimits, uid)
 		m.globalUserRates.Delete(uid)
+		m.globalAllocated.Delete(uid)
 		m.globalSpeed.Delete(uid)
 		return
 	}
@@ -315,6 +339,9 @@ func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket
 		rate = stored.(int)
 	}
 	limit := int64(rate) * 1_000_000 / 8
+	if allocated, ok := m.globalAllocated.Load(uid); ok {
+		limit = int64(allocated.(uint64))
+	}
 	if limit <= 0 {
 		m.globalSpeed.Delete(uid)
 		return nil
@@ -329,6 +356,9 @@ func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket
 		}
 	}
 	bucket := ratelimit.NewBucketWithQuantum(100*time.Millisecond, burst, burst)
+	// A full initial bucket lets a sub-window file finish before any wait. Start
+	// empty so short transfers are also constrained by the configured rate.
+	bucket.TakeAvailable(burst)
 	m.globalSpeed.Store(uid, bucket)
 	return bucket
 }

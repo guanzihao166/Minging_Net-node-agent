@@ -23,6 +23,7 @@ type Runtime interface {
 	DisconnectSubscribers(context.Context, []int64) error
 	ApplyUsers(context.Context, []agentprotocol.UserCredential) error
 	ApplyUserDelta(context.Context, agentprotocol.UserDelta) ([]agentprotocol.UserCredential, error)
+	ApplyBandwidthAllocation(context.Context, agentprotocol.BandwidthAllocation) error
 	CollectTraffic(context.Context) ([]state.TrafficDelta, error)
 	CollectAccess(context.Context) ([]agentprotocol.AccessItem, error)
 	RequeueAccess([]agentprotocol.AccessItem)

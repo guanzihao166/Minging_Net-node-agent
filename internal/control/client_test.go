@@ -100,6 +100,11 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 				})
 			case agentprotocol.TypeUserResult:
 				usersApplied = true
+				writeProtocolEnvelope(t, connection, agentprotocol.TypeBandwidthAllocation, agentprotocol.BandwidthAllocation{
+					Allocations: []agentprotocol.SubscriberBandwidthAllocation{{
+						SubscriberID: 901, SpeedLimitBPS: 1_250_000, AllocationActive: true,
+					}},
+				})
 			case agentprotocol.TypeHeartbeat:
 				var heartbeat agentprotocol.Heartbeat
 				if err := agentprotocol.DecodePayload(envelope, &heartbeat); err != nil {
@@ -191,8 +196,8 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.configApplies != 1 || runtime.disconnects != 1 || runtime.userApplies != 1 {
-		t.Fatalf("runtime applies = config %d disconnects %d users %d", runtime.configApplies, runtime.disconnects, runtime.userApplies)
+	if runtime.configApplies != 1 || runtime.disconnects != 1 || runtime.userApplies != 1 || runtime.allocations != 1 {
+		t.Fatalf("runtime applies = config %d disconnects %d users %d allocations %d", runtime.configApplies, runtime.disconnects, runtime.userApplies, runtime.allocations)
 	}
 }
 
@@ -319,6 +324,7 @@ type fakeRuntime struct {
 	configApplies int
 	disconnects   int
 	userApplies   int
+	allocations   int
 	trafficSent   bool
 }
 
@@ -341,6 +347,13 @@ func (f *fakeRuntime) ApplyUserDelta(_ context.Context, delta agentprotocol.User
 	f.userApplies++
 	f.mu.Unlock()
 	return append([]agentprotocol.UserCredential(nil), delta.Upserts...), nil
+}
+
+func (f *fakeRuntime) ApplyBandwidthAllocation(context.Context, agentprotocol.BandwidthAllocation) error {
+	f.mu.Lock()
+	f.allocations++
+	f.mu.Unlock()
+	return nil
 }
 
 func (f *fakeRuntime) DisconnectUsers(context.Context, []agentprotocol.UserCredential) error {
