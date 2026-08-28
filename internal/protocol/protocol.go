@@ -352,8 +352,8 @@ func validateVLESS(inbound Inbound, profile SecurityProfile, hasProfile bool) er
 	if inbound.VLESS == nil || inbound.VMess != nil || inbound.Trojan != nil || inbound.SS2022 != nil || inbound.TUIC != nil || inbound.Hysteria2 != nil {
 		return errors.New("vless protocol payload is invalid")
 	}
-	if !hasProfile || profile.Type != SecurityTLS && profile.Type != SecurityReality {
-		return errors.New("vless requires tls or reality")
+	if hasProfile && profile.Type != SecurityTLS && profile.Type != SecurityReality {
+		return errors.New("vless only supports tls, reality, or no security profile")
 	}
 	if err := validateVLESSEncryption(*inbound.VLESS); err != nil {
 		return err
@@ -366,6 +366,9 @@ func validateVLESS(inbound Inbound, profile SecurityProfile, hasProfile bool) er
 	}
 	if inbound.VLESS.Flow != "" && inbound.VLESS.Flow != "xtls-rprx-vision" {
 		return errors.New("vless flow is invalid")
+	}
+	if !hasProfile && inbound.VLESS.Flow != "" {
+		return errors.New("vless vision requires tls or reality")
 	}
 	return nil
 }

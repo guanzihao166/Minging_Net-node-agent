@@ -163,6 +163,26 @@ func TestAppliesRealityXHTTPWithVision(t *testing.T) {
 	}
 }
 
+func TestAppliesVLESSXHTTPWithoutSecurity(t *testing.T) {
+	desired := testDesiredConfig()
+	desired.Inbounds = []agentprotocol.Inbound{desired.Inbounds[0]}
+	desired.Inbounds[0].SecurityProfileID = 0
+	desired.Inbounds[0].VLESS.Flow = ""
+	desired.Inbounds[0].Transport = agentprotocol.Transport{Type: agentprotocol.TransportXHTTP, Path: "/esa", XHTTPMode: "stream-up"}
+	desired.Inbounds[0].Port = availableProtocolPortBlock(t)
+	if err := agentprotocol.ValidateDesiredConfig(desired); err != nil {
+		t.Fatalf("VLESS XHTTP without security rejected: %v", err)
+	}
+	runtime, err := NewXray(testRuntimeSecrets(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if err := runtime.ApplyConfig(context.Background(), desired); err != nil {
+		t.Fatalf("ApplyConfig VLESS XHTTP without security: %v", err)
+	}
+}
+
 func TestSS2022NormalizesLegacyAndRawServerKeyMaterial(t *testing.T) {
 	rawKey := bytes.Repeat([]byte{0x5a}, 32)
 	for name, material := range map[string][]byte{
