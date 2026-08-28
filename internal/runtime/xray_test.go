@@ -143,6 +143,26 @@ func TestMapsVLESSXHTTPAndEncryption(t *testing.T) {
 	}
 }
 
+func TestAppliesRealityXHTTPWithVision(t *testing.T) {
+	desired := testDesiredConfig()
+	desired.Inbounds = []agentprotocol.Inbound{desired.Inbounds[0]}
+	desired.Inbounds[0].Port = availableProtocolPortBlock(t)
+	desired.Inbounds[0].Transport = agentprotocol.Transport{
+		Type: agentprotocol.TransportXHTTP, Path: "/vision", XHTTPMode: "auto",
+	}
+	if err := agentprotocol.ValidateDesiredConfig(desired); err != nil {
+		t.Fatalf("Reality XHTTP Vision config rejected: %v", err)
+	}
+	runtime, err := NewXray(testRuntimeSecrets(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if err := runtime.ApplyConfig(context.Background(), desired); err != nil {
+		t.Fatalf("ApplyConfig Reality XHTTP Vision: %v", err)
+	}
+}
+
 func TestSS2022NormalizesLegacyAndRawServerKeyMaterial(t *testing.T) {
 	rawKey := bytes.Repeat([]byte{0x5a}, 32)
 	for name, material := range map[string][]byte{

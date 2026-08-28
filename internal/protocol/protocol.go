@@ -361,15 +361,22 @@ func validateVLESS(inbound Inbound, profile SecurityProfile, hasProfile bool) er
 	if err := validateStreamTransport(inbound.Transport); err != nil {
 		return err
 	}
-	if profile.Type == SecurityReality {
-		if inbound.Transport.Type != TransportTCP || inbound.VLESS.Flow != "xtls-rprx-vision" {
-			return errors.New("vless reality requires tcp and xtls-rprx-vision")
-		}
+	if profile.Type == SecurityReality && !supportsRealityTransport(inbound.Transport.Type) {
+		return errors.New("vless reality supports tcp, grpc, xhttp, or splithttp transport")
 	}
-	if inbound.VLESS.Flow != "" && (inbound.VLESS.Flow != "xtls-rprx-vision" || inbound.Transport.Type != TransportTCP) {
-		return errors.New("vless flow is invalid for transport")
+	if inbound.VLESS.Flow != "" && inbound.VLESS.Flow != "xtls-rprx-vision" {
+		return errors.New("vless flow is invalid")
 	}
 	return nil
+}
+
+func supportsRealityTransport(transport string) bool {
+	switch transport {
+	case TransportTCP, TransportGRPC, TransportXHTTP, TransportSplitHTTP:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateVLESSEncryption(config VLESSConfig) error {
