@@ -2,6 +2,7 @@ package agentprotocol
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -17,19 +18,22 @@ const SchemaVersion = 1
 type Protocol string
 
 const (
-	ProtocolVLESS      Protocol = "vless"
-	ProtocolVMess      Protocol = "vmess"
-	ProtocolTrojan     Protocol = "trojan"
-	ProtocolSS2022     Protocol = "shadowsocks2022"
-	ProtocolTUIC       Protocol = "tuic"
-	ProtocolHysteria2  Protocol = "hysteria2"
-	SecurityNone                = "none"
-	SecurityTLS                 = "tls"
-	SecurityReality             = "reality"
-	TransportTCP                = "tcp"
-	TransportWebSocket          = "ws"
-	TransportGRPC               = "grpc"
-	TransportQUIC               = "quic"
+	ProtocolVLESS        Protocol = "vless"
+	ProtocolVMess        Protocol = "vmess"
+	ProtocolTrojan       Protocol = "trojan"
+	ProtocolSS2022       Protocol = "shadowsocks2022"
+	ProtocolTUIC         Protocol = "tuic"
+	ProtocolHysteria2    Protocol = "hysteria2"
+	SecurityNone                  = "none"
+	SecurityTLS                   = "tls"
+	SecurityReality               = "reality"
+	TransportTCP                  = "tcp"
+	TransportWebSocket            = "ws"
+	TransportGRPC                 = "grpc"
+	TransportHTTPUpgrade          = "httpupgrade"
+	TransportXHTTP                = "xhttp"
+	TransportSplitHTTP            = "splithttp"
+	TransportQUIC                 = "quic"
 )
 
 type DesiredConfig struct {
@@ -72,6 +76,8 @@ type Transport struct {
 	Path                string `json:"path,omitempty"`
 	Host                string `json:"host,omitempty"`
 	ServiceName         string `json:"service_name,omitempty"`
+	XHTTPMode           string `json:"xhttp_mode,omitempty"`
+	XHTTPExtra          string `json:"xhttp_extra,omitempty"`
 	AcceptProxyProtocol bool   `json:"accept_proxy_protocol,omitempty"`
 }
 
@@ -103,8 +109,14 @@ type RealityProfile struct {
 }
 
 type VLESSConfig struct {
-	Decryption string `json:"decryption"`
-	Flow       string `json:"flow,omitempty"`
+	Decryption              string `json:"decryption"`
+	Flow                    string `json:"flow,omitempty"`
+	EncryptionMode          string `json:"encryption_mode,omitempty"`
+	EncryptionTicket        string `json:"encryption_ticket,omitempty"`
+	EncryptionServerPadding string `json:"encryption_server_padding,omitempty"`
+	EncryptionClientRTT     string `json:"encryption_client_rtt,omitempty"`
+	EncryptionPrivateKeyRef string `json:"encryption_private_key_ref,omitempty"`
+	EncryptionClientConfig  string `json:"encryption_client_config,omitempty"`
 }
 
 // VMess is intentionally fixed to UUID authentication with alterId 0 and
@@ -215,6 +227,9 @@ func ReferencedSecretRefs(config DesiredConfig) []string {
 		}
 	}
 	for _, inbound := range config.Inbounds {
+		if inbound.VLESS != nil {
+			add(inbound.VLESS.EncryptionPrivateKeyRef)
+		}
 		if inbound.SS2022 != nil {
 			add(inbound.SS2022.ServerKeyRef)
 		}
@@ -340,8 +355,8 @@ func validateVLESS(inbound Inbound, profile SecurityProfile, hasProfile bool) er
 	if !hasProfile || profile.Type != SecurityTLS && profile.Type != SecurityReality {
 		return errors.New("vless requires tls or reality")
 	}
-	if inbound.VLESS.Decryption != "none" {
-		return errors.New("vless decryption must be none")
+	if err := validateVLESSEncryption(*inbound.VLESS); err != nil {
+		return err
 	}
 	if err := validateStreamTransport(inbound.Transport); err != nil {
 		return err
@@ -355,6 +370,56 @@ func validateVLESS(inbound Inbound, profile SecurityProfile, hasProfile bool) er
 		return errors.New("vless flow is invalid for transport")
 	}
 	return nil
+}
+
+func validateVLESSEncryption(config VLESSConfig) error {
+	switch config.Decryption {
+	case "none":
+		if config.EncryptionMode != "" || config.EncryptionTicket != "" || config.EncryptionServerPadding != "" || config.EncryptionClientRTT != "" || config.EncryptionPrivateKeyRef != "" || config.EncryptionClientConfig != "" {
+			return errors.New("vless encryption fields require mlkem768x25519plus")
+		}
+	case "mlkem768x25519plus":
+		switch config.EncryptionMode {
+		case "native", "xorpub", "random":
+		default:
+			return errors.New("vless encryption mode is invalid")
+		}
+		if !validSecretRef(config.EncryptionPrivateKeyRef) {
+			return errors.New("vless encryption private key reference is required")
+		}
+		if config.EncryptionClientRTT != "0rtt" && config.EncryptionClientRTT != "1rtt" {
+			return errors.New("vless encryption client rtt is invalid")
+		}
+		if !validVLESSServerTicket(config.EncryptionTicket) || !validVLESSEncryptionConfig(config.EncryptionClientConfig, true) {
+			return errors.New("vless encryption configuration is invalid")
+		}
+	default:
+		return errors.New("unsupported vless decryption")
+	}
+	return nil
+}
+
+func validVLESSEncryptionConfig(value string, client bool) bool {
+	parts := strings.Split(strings.TrimSpace(value), ".")
+	if len(parts) < 4 || parts[0] != "mlkem768x25519plus" || (parts[1] != "native" && parts[1] != "xorpub" && parts[1] != "random") {
+		return false
+	}
+	return client && (parts[2] == "0rtt" || parts[2] == "1rtt")
+}
+
+func validVLESSServerTicket(value string) bool {
+	value = strings.TrimSuffix(strings.TrimSpace(value), "s")
+	parts := strings.Split(value, "-")
+	if len(parts) == 0 || len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		seconds, err := strconv.Atoi(part)
+		if err != nil || seconds <= 0 || seconds > 86400 {
+			return false
+		}
+	}
+	return true
 }
 
 func validateVMess(inbound Inbound, profile SecurityProfile, hasProfile bool) error {
@@ -458,7 +523,7 @@ func validateHysteria2(inbound Inbound, profile SecurityProfile, hasProfile bool
 func validateStreamTransport(transport Transport) error {
 	switch transport.Type {
 	case TransportTCP:
-		if transport.Path != "" || transport.ServiceName != "" {
+		if transport.Path != "" || transport.ServiceName != "" || transport.XHTTPMode != "" || transport.XHTTPExtra != "" {
 			return errors.New("tcp transport has incompatible fields")
 		}
 	case TransportWebSocket:
@@ -468,6 +533,20 @@ func validateStreamTransport(transport Transport) error {
 	case TransportGRPC:
 		if strings.TrimSpace(transport.ServiceName) == "" || strings.ContainsAny(transport.ServiceName, "\r\n") {
 			return errors.New("grpc service name is required")
+		}
+	case TransportHTTPUpgrade:
+		if !strings.HasPrefix(transport.Path, "/") {
+			return errors.New("httpupgrade path must start with slash")
+		}
+	case TransportXHTTP, TransportSplitHTTP:
+		if !strings.HasPrefix(transport.Path, "/") {
+			return errors.New("xhttp path must start with slash")
+		}
+		if strings.TrimSpace(transport.XHTTPMode) == "" || strings.ContainsAny(transport.XHTTPMode, "\r\n") {
+			return errors.New("xhttp mode is required")
+		}
+		if strings.TrimSpace(transport.XHTTPExtra) != "" && !json.Valid([]byte(transport.XHTTPExtra)) {
+			return errors.New("xhttp extra must be valid json")
 		}
 	default:
 		return errors.New("unsupported stream transport")

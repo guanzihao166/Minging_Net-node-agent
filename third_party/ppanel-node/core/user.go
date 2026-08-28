@@ -261,6 +261,7 @@ func buildVlessUser(tag string, userInfo *panel.UserInfo, flow string) (user *pr
 		Id: userInfo.Uuid,
 	}
 	vlessAccount.Flow = flow
+	vlessAccount.Encryption = userInfo.Encryption
 	return &protocol.User{
 		Level:   0,
 		Email:   format.UserTag(tag, userInfo.Uuid),

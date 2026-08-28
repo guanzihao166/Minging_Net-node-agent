@@ -102,6 +102,47 @@ func TestProxyProtocolIsMappedToXrayInbound(t *testing.T) {
 	}
 }
 
+func TestMapsVLESSXHTTPAndEncryption(t *testing.T) {
+	secrets := testRuntimeSecrets(t)
+	encKey := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x5a}, 32))
+	if err := secrets.Put("agent-secret:vless-enc:31:1", []byte(encKey)); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewXray(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := testDesiredConfig()
+	inbound := &desired.Inbounds[0]
+	inbound.SecurityProfileID = 1
+	inbound.Transport = agentprotocol.Transport{Type: agentprotocol.TransportXHTTP, Host: "edge.example.com", Path: "/xhttp", XHTTPMode: "auto", XHTTPExtra: `{"headers":{"X-Test":"1"}}`}
+	inbound.VLESS = &agentprotocol.VLESSConfig{
+		Decryption:              "mlkem768x25519plus",
+		EncryptionMode:          "native",
+		EncryptionTicket:        "600s",
+		EncryptionClientRTT:     "0rtt",
+		EncryptionPrivateKeyRef: "agent-secret:vless-enc:31:1",
+		EncryptionClientConfig:  "mlkem768x25519plus.native.0rtt.client-key",
+	}
+	if err := agentprotocol.ValidateDesiredConfig(desired); err != nil {
+		t.Fatalf("fixture is invalid: %v", err)
+	}
+	node, err := runtime.panelNodeForInbound(desired, *inbound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Protocol.Transport != "xhttp" || node.Protocol.XHTTPMode != "auto" || node.Protocol.XHTTPExtra == "" || node.Protocol.EncryptionPrivateKey != encKey {
+		t.Fatalf("VLESS XHTTP encryption mapping = %#v", node.Protocol)
+	}
+	users, err := panelUsersByInbound(desired, []agentprotocol.UserCredential{{SubscriberID: 1, InboundID: inbound.ID, Kind: "uuid", Value: "3e285077-7932-4e8d-b232-9b6d58dd6671"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := users[inbound.ID][0].Encryption; got != inbound.VLESS.EncryptionClientConfig {
+		t.Fatalf("VLESS user encryption = %q", got)
+	}
+}
+
 func TestSS2022NormalizesLegacyAndRawServerKeyMaterial(t *testing.T) {
 	rawKey := bytes.Repeat([]byte{0x5a}, 32)
 	for name, material := range map[string][]byte{

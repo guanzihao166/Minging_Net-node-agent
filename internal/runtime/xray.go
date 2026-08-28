@@ -576,7 +576,8 @@ func (r *XrayRuntime) panelNodeForInbound(desired agentprotocol.DesiredConfig, i
 	protocol := panel.Protocol{
 		Port: inbound.Port, Enable: inbound.Enabled, Transport: inbound.Transport.Type,
 		Host: inbound.Transport.Host, Path: inbound.Transport.Path,
-		ServiceName: inbound.Transport.ServiceName, AcceptProxyProtocol: inbound.Transport.AcceptProxyProtocol,
+		ServiceName: inbound.Transport.ServiceName, XHTTPMode: inbound.Transport.XHTTPMode,
+		XHTTPExtra: inbound.Transport.XHTTPExtra, AcceptProxyProtocol: inbound.Transport.AcceptProxyProtocol,
 	}
 	info := &panel.NodeInfo{Id: int(inbound.ID), PushInterval: 60, PullInterval: 315360000, Protocol: &protocol}
 	switch inbound.Protocol {
@@ -585,6 +586,16 @@ func (r *XrayRuntime) panelNodeForInbound(desired agentprotocol.DesiredConfig, i
 		protocol.Type = "vless"
 		protocol.Flow = inbound.VLESS.Flow
 		protocol.Encryption = inbound.VLESS.Decryption
+		protocol.EncryptionMode = inbound.VLESS.EncryptionMode
+		protocol.EncryptionTicket = inbound.VLESS.EncryptionTicket
+		protocol.EncryptionServerPadding = inbound.VLESS.EncryptionServerPadding
+		if inbound.VLESS.EncryptionPrivateKeyRef != "" {
+			privateKey, err := r.secrets.Resolve(inbound.VLESS.EncryptionPrivateKeyRef)
+			if err != nil {
+				return nil, fmt.Errorf("resolve VLESS encryption private key: %w", err)
+			}
+			protocol.EncryptionPrivateKey = strings.TrimSpace(string(privateKey))
+		}
 	case agentprotocol.ProtocolVMess:
 		info.Type, protocol.Type = "vmess", "vmess"
 	case agentprotocol.ProtocolTrojan:
@@ -726,10 +737,14 @@ func panelUsersByInbound(desired agentprotocol.DesiredConfig, users []agentproto
 		if user.SpeedLimitBPS > 0 {
 			speedMbps = int(math.Ceil(float64(user.SpeedLimitBPS*8) / 1000000))
 		}
-		grouped[user.InboundID] = append(grouped[user.InboundID], panel.UserInfo{
+		panelUser := panel.UserInfo{
 			Id: int(user.SubscriberID), Uuid: user.Value,
 			SpeedLimit: speedMbps, DeviceLimit: int(user.DeviceLimit),
-		})
+		}
+		if inbound.Protocol == agentprotocol.ProtocolVLESS && inbound.VLESS != nil {
+			panelUser.Encryption = inbound.VLESS.EncryptionClientConfig
+		}
+		grouped[user.InboundID] = append(grouped[user.InboundID], panelUser)
 	}
 	return grouped, nil
 }
