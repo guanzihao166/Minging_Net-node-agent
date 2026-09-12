@@ -171,6 +171,16 @@ func TestControlSessionAppliesSignedStateAndAcknowledgesTraffic(t *testing.T) {
 	client.publicAddresses = func() hostnetwork.Addresses {
 		return hostnetwork.Addresses{IPv4: "198.51.100.17", IPv6: "2001:db8::17"}
 	}
+	collectorCtx, cancelCollector := context.WithCancel(ctx)
+	collectorDone := make(chan struct{})
+	go func() {
+		defer close(collectorDone)
+		client.runTrafficCollector(collectorCtx)
+	}()
+	defer func() {
+		cancelCollector()
+		<-collectorDone
+	}()
 	established := make(chan struct{}, 1)
 	_ = client.runSessionWithEstablished(ctx, func() { established <- struct{}{} })
 	select {
@@ -302,6 +312,58 @@ func TestReconnectScheduleResetsAfterEstablishedSession(t *testing.T) {
 	wait, next = reconnectSchedule(maximum, minimum, maximum, false)
 	if wait != maximum || next != maximum {
 		t.Fatalf("capped reconnect schedule = %s, %s; want %s, %s", wait, next, maximum, maximum)
+	}
+}
+
+func TestTrafficCollectorPersistsWhileControlSessionIsDown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root := t.TempDir()
+	store, err := state.Open(ctx, filepath.Join(root, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	secrets, err := secretstore.Open(filepath.Join(root, "config"), filepath.Join(root, "run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeRuntime{userApplies: 1}
+	client, err := New(config.Config{
+		Version: "test", HeartbeatInterval: time.Second, TrafficInterval: 10 * time.Millisecond,
+		ReconnectMin: time.Second, ReconnectMax: time.Second, MaxFrameBytes: 1024 * 1024,
+	}, &identity.Identity{AgentNodeID: 17, ConfigSigningKeyID: "test-key"}, tlsCertificateForTest(), publicKey, store, secrets, runtime, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectorDone := make(chan struct{})
+	go func() {
+		defer close(collectorDone)
+		client.runTrafficCollector(ctx)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		pending, _, statsErr := store.PendingTrafficStats(ctx)
+		if statsErr != nil {
+			t.Fatal(statsErr)
+		}
+		if pending == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("traffic collector did not persist a disconnected sample")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-collectorDone
+	pending, _, err := store.PendingTrafficStats(context.Background())
+	if err != nil || pending != 1 {
+		t.Fatalf("pending WAL after collector shutdown = %d, %v", pending, err)
 	}
 }
 

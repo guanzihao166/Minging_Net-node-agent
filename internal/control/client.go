@@ -48,6 +48,8 @@ type Client struct {
 	publicAddresses        func() hostnetwork.Addresses
 	loadRuntimeState       func(context.Context) (state.RuntimeState, error)
 	trafficWindowStartedAt time.Time
+	trafficRetryDeltas     []state.TrafficDelta
+	trafficRetryStartedAt  time.Time
 }
 
 type hostMetricsSampler interface {
@@ -79,6 +81,21 @@ func New(cfg config.Config, id *identity.Identity, certificate tls.Certificate, 
 }
 
 func (c *Client) Run(ctx context.Context) error {
+	collectorCtx, cancelCollector := context.WithCancel(ctx)
+	collectorDone := make(chan struct{})
+	go func() {
+		defer close(collectorDone)
+		c.runTrafficCollector(collectorCtx)
+	}()
+	defer func() {
+		cancelCollector()
+		<-collectorDone
+		flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelFlush()
+		if err := c.collectTrafficWindow(flushCtx); err != nil {
+			c.logger.Warn("persist final traffic WAL", "error", err)
+		}
+	}()
 	delay := c.cfg.ReconnectMin
 	for {
 		if err := ctx.Err(); err != nil {
@@ -460,7 +477,7 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				return
 			}
 		case <-trafficTicker.C:
-			if err := c.collectAndSendTraffic(ctx, writer); err != nil {
+			if err := c.sendPendingTraffic(ctx, writer); err != nil {
 				sendSessionError(errCh, err)
 				return
 			}
@@ -476,6 +493,24 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 		case <-accessTicker.C:
 			if err := c.collectAndSendAccess(ctx, writer); err != nil {
 				c.logger.Warn("collect or send access WAL", "error", err)
+			}
+		}
+	}
+}
+
+// runTrafficCollector keeps sampling the data plane even while the control
+// WebSocket is down. Each successful sample is committed to the local SQLite
+// WAL before the reconnect loop is allowed to send it.
+func (c *Client) runTrafficCollector(ctx context.Context) {
+	ticker := time.NewTicker(c.cfg.TrafficInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.collectTrafficWindow(ctx); err != nil {
+				c.logger.Warn("persist traffic WAL", "error", err)
 			}
 		}
 	}
@@ -660,7 +695,7 @@ func normalizedCredentialKind(value string) string {
 	return out.String()
 }
 
-func (c *Client) collectAndSendTraffic(ctx context.Context, writer *sessionWriter) error {
+func (c *Client) collectTrafficWindow(ctx context.Context) error {
 	c.runtimeSyncMu.RLock()
 	deltas, err := c.runtime.CollectTraffic(ctx)
 	c.runtimeSyncMu.RUnlock()
@@ -672,9 +707,19 @@ func (c *Client) collectAndSendTraffic(ctx context.Context, writer *sessionWrite
 	if intervalStartedAt.IsZero() || !intervalEndedAt.After(intervalStartedAt) {
 		intervalStartedAt = intervalEndedAt.Add(-c.cfg.TrafficInterval)
 	}
+	if len(c.trafficRetryDeltas) > 0 {
+		deltas = mergeTrafficDeltas(c.trafficRetryDeltas, deltas)
+		if c.trafficRetryStartedAt.Before(intervalStartedAt) {
+			intervalStartedAt = c.trafficRetryStartedAt
+		}
+	}
 	if err := c.store.AddTrafficWindow(ctx, deltas, intervalStartedAt, intervalEndedAt); err != nil {
+		c.trafficRetryDeltas = deltas
+		c.trafficRetryStartedAt = intervalStartedAt
 		return err
 	}
+	c.trafficRetryDeltas = nil
+	c.trafficRetryStartedAt = time.Time{}
 	c.trafficWindowStartedAt = intervalEndedAt
 	runtimeState, err := c.store.RuntimeState(ctx)
 	if err != nil {
@@ -683,7 +728,35 @@ func (c *Client) collectAndSendTraffic(ctx context.Context, writer *sessionWrite
 	if _, err := c.store.DrainTraffic(ctx, c.bootID, runtimeState.AppliedConfigVersion); err != nil {
 		return err
 	}
-	return c.sendPendingTraffic(ctx, writer)
+	return nil
+}
+
+func mergeTrafficDeltas(left, right []state.TrafficDelta) []state.TrafficDelta {
+	if len(left) == 0 {
+		return append([]state.TrafficDelta(nil), right...)
+	}
+	merged := make(map[[3]int64]state.TrafficDelta, len(left)+len(right))
+	add := func(delta state.TrafficDelta) {
+		key := [3]int64{delta.SubscriberID, delta.InboundID, int64(delta.QuotaGeneration)}
+		current := merged[key]
+		current.SubscriberID = delta.SubscriberID
+		current.InboundID = delta.InboundID
+		current.QuotaGeneration = delta.QuotaGeneration
+		current.UploadBytes += delta.UploadBytes
+		current.DownloadBytes += delta.DownloadBytes
+		merged[key] = current
+	}
+	for _, delta := range left {
+		add(delta)
+	}
+	for _, delta := range right {
+		add(delta)
+	}
+	out := make([]state.TrafficDelta, 0, len(merged))
+	for _, delta := range merged {
+		out = append(out, delta)
+	}
+	return out
 }
 
 func (c *Client) sendPendingTraffic(ctx context.Context, writer *sessionWriter) error {
