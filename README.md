@@ -75,6 +75,51 @@ installations older than `v0.1.15` need one regular installer upgrade; all later
 checks, updates, and full uninstalls are available from the administrator
 console.
 
+## Automatic BBR configuration (v0.1.52)
+
+After installation, an upgrade, or a maintenance-service restart, the root
+maintenance manager applies best-effort Linux TCP tuning. Selection uses actual
+kernel capabilities, not distribution names or kernel-version guesses:
+
+| Kernel / environment | Result |
+| --- | --- |
+| `bbr2` available or `tcp_bbr2` loadable | Select BBRv2 |
+| Only `bbr` available or `tcp_bbr` loadable | Select kernel BBR and log the fallback; its generation is not inferred |
+| `bbr3` already selected | Preserve it |
+| No supported BBR implementation | Preserve current algorithm and remove stale Agent-owned tuning config |
+| Restricted container / read-only procfs | Log the failure; keep Agent running |
+| Read-only configuration filesystem | Apply runtime setting where possible and log missing persistence |
+
+The Agent attempts `fq` as the default for future interfaces. Existing interface
+queue disciplines, shaping rules and open connections are not replaced. A TCP
+default does not configure UDP/QUIC congestion control. The code does not install
+a kernel, reboot the server or claim that a generic `bbr` implementation is v2.
+Module loading is skipped in detected containers because modules are host-global.
+
+Verified settings are saved atomically in
+`/etc/sysctl.d/99-zz-iepl-agent-bbr.conf`. A conflicting unmanaged file at this path
+is left intact and reported. Startup rechecks capabilities after a kernel change.
+Other software can still override host settings later; this is not a continuous
+enforcement loop.
+
+On systemd, a fixed root oneshot (`iepl-agent-network-tuning.service`) performs
+the work outside the old maintenance unit's read-only kernel sandbox. The normal
+Agent keeps its existing privileges. On OpenRC, the root maintenance process
+performs tuning directly. Unsupported permissions, missing tools and failed
+readback never make the upgrade fail. A failed readback triggers an attempt to
+restore the previous algorithm. Each external helper has a five-second timeout.
+
+Inspect the result on systemd:
+
+```sh
+journalctl -u iepl-agent-network-tuning.service --no-pager -n 20
+sysctl net.ipv4.tcp_congestion_control net.ipv4.tcp_available_congestion_control
+```
+
+On OpenRC, inspect the maintenance-service log. Root can manually retry using
+`/opt/iepl-agent/bin/iepl-agent tune-network`. Full uninstall removes only the
+Agent-owned tuning files and leaves the current runtime TCP default intact.
+
 ## Host metrics
 
 Starting with `v0.1.18`, the Agent samples Linux `/proc` on each heartbeat and
