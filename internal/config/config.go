@@ -30,7 +30,7 @@ type Config struct {
 func Parse(args []string, version string) (Config, error) {
 	cfg := Config{Version: version}
 	if len(args) == 0 {
-		return cfg, errors.New("command is required: enroll, run, check, or maintain")
+		return cfg, errors.New("command is required: enroll, run, check, maintain, tune-network, or version")
 	}
 	cfg.Command = strings.ToLower(strings.TrimSpace(args[0]))
 	set := flag.NewFlagSet("iepl-agent "+cfg.Command, flag.ContinueOnError)
@@ -56,7 +56,7 @@ func Parse(args []string, version string) (Config, error) {
 	cfg.RuntimeDir = filepath.Clean(cfg.RuntimeDir)
 	cfg.MaintenanceDir = filepath.Clean(cfg.MaintenanceDir)
 	cfg.MaintenanceStateDir = filepath.Clean(cfg.MaintenanceStateDir)
-	if cfg.Command != "enroll" && cfg.Command != "run" && cfg.Command != "check" && cfg.Command != "maintain" && cfg.Command != "version" {
+	if cfg.Command != "enroll" && cfg.Command != "run" && cfg.Command != "check" && cfg.Command != "maintain" && cfg.Command != "version" && cfg.Command != "tune-network" {
 		return cfg, errors.New("unsupported command")
 	}
 	if cfg.Command == "enroll" && (strings.TrimSpace(cfg.EnrollmentURL) == "" || strings.TrimSpace(cfg.EnrollmentTokenFile) == "") {

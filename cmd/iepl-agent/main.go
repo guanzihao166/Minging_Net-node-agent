@@ -15,6 +15,7 @@ import (
 	"github.com/guanzihao166/iepl-node-agent/internal/control"
 	"github.com/guanzihao166/iepl-node-agent/internal/identity"
 	"github.com/guanzihao166/iepl-node-agent/internal/maintenance"
+	"github.com/guanzihao166/iepl-node-agent/internal/nettune"
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 	agentruntime "github.com/guanzihao166/iepl-node-agent/internal/runtime"
 	"github.com/guanzihao166/iepl-node-agent/internal/secretstore"
@@ -42,6 +43,10 @@ func run(args []string, logger *slog.Logger) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if cfg.Command == "tune-network" {
+		nettune.Apply(ctx, logger)
+		return nil
+	}
 	if cfg.Command == "enroll" {
 		_, err := identity.Enroll(ctx, cfg, nil)
 		if err == nil {
@@ -54,6 +59,7 @@ func run(args []string, logger *slog.Logger) error {
 		return fmt.Errorf("load agent identity: %w", err)
 	}
 	if cfg.Command == "maintain" {
+		nettune.Start(ctx, logger)
 		manager, err := maintenance.NewManager(cfg, id, signingKey, version, logger)
 		if err != nil {
 			return err

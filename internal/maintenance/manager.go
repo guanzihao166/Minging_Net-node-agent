@@ -24,6 +24,7 @@ import (
 
 	"github.com/guanzihao166/iepl-node-agent/internal/config"
 	"github.com/guanzihao166/iepl-node-agent/internal/identity"
+	"github.com/guanzihao166/iepl-node-agent/internal/nettune"
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 )
 
@@ -502,6 +503,8 @@ func agentServiceActive(ctx context.Context) error {
 func (m *Manager) uninstall(ctx context.Context) error {
 	var serviceErr error
 	if _, err := os.Stat("/run/systemd/system"); err == nil {
+		_ = runFirst(ctx, [][]string{{"/bin/systemctl", "stop", "iepl-agent-network-tuning.service"}, {"/usr/bin/systemctl", "stop", "iepl-agent-network-tuning.service"}})
+		nettune.Cleanup()
 		serviceErr = runFirst(ctx, [][]string{{"/bin/systemctl", "stop", "iepl-agent.service"}, {"/usr/bin/systemctl", "stop", "iepl-agent.service"}})
 		_ = runFirst(ctx, [][]string{{"/bin/systemctl", "disable", "iepl-agent.service", "iepl-agent-maintenance.service"}, {"/usr/bin/systemctl", "disable", "iepl-agent.service", "iepl-agent-maintenance.service"}})
 		_ = os.Remove("/etc/systemd/system/iepl-agent.service")
@@ -510,6 +513,7 @@ func (m *Manager) uninstall(ctx context.Context) error {
 		_ = os.Remove("/etc/systemd/system/iepl-agent-maintenance.service.previous")
 		_ = runFirst(ctx, [][]string{{"/bin/systemctl", "daemon-reload"}, {"/usr/bin/systemctl", "daemon-reload"}})
 	} else {
+		nettune.Cleanup()
 		serviceErr = runFirst(ctx, [][]string{{"/sbin/rc-service", "iepl-agent", "stop"}, {"/usr/sbin/rc-service", "iepl-agent", "stop"}})
 		_ = runFirst(ctx, [][]string{{"/sbin/rc-update", "del", "iepl-agent", "default"}, {"/usr/sbin/rc-update", "del", "iepl-agent", "default"}})
 		_ = runFirst(ctx, [][]string{{"/sbin/rc-update", "del", "iepl-agent-maintenance", "default"}, {"/usr/sbin/rc-update", "del", "iepl-agent-maintenance", "default"}})
