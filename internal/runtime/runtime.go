@@ -11,6 +11,11 @@ type Status struct {
 	Running        bool
 	Version        string
 	CoreGeneration uint64
+	// GuardedInbounds counts REALITY inbounds fronted by the SNI guard.
+	GuardedInbounds int
+	// GuardRejected counts connections the SNI guard dropped since process
+	// start: non-declared SNI, malformed handshakes, and backend failures.
+	GuardRejected uint64
 }
 
 type Runtime interface {

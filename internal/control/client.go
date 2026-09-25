@@ -176,7 +176,14 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 			RootCAs:      c.rootCAs,
 		},
 	}
-	connection, response, err := dialer.DialContext(ctx, c.identity.WSSURL, nil)
+	headers := http.Header{}
+	// Existing test/legacy identities without a client key keep the original
+	// transport. Enrolled production identities always have an Ed25519 key.
+	_, proofEnabled := c.cert.PrivateKey.(ed25519.PrivateKey)
+	if proofEnabled {
+		headers.Set("X-Minging-Net-Agent-Auth", "certificate-proof-v1")
+	}
+	connection, response, err := dialer.DialContext(ctx, c.identity.WSSURL, headers)
 	if err != nil {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
@@ -185,6 +192,11 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 	}
 	defer connection.Close()
 	connection.SetReadLimit(c.cfg.MaxFrameBytes)
+	if proofEnabled {
+		if err := proveSession(connection, c.cert, c.identity.WSSURL, c.now()); err != nil {
+			return err
+		}
+	}
 	writer := &sessionWriter{connection: connection, now: c.now}
 	hello := agentprotocol.Hello{
 		ProtocolVersion: agentprotocol.ProtocolVersion,
@@ -207,6 +219,12 @@ func (c *Client) runSessionWithEstablished(ctx context.Context, onEstablished fu
 	var helloAck agentprotocol.HelloAck
 	if err := agentprotocol.DecodePayload(ackEnvelope, &helloAck); err != nil || helloAck.ProtocolVersion != agentprotocol.ProtocolVersion || helloAck.SessionID == "" {
 		return errors.New("control hello acknowledgement is invalid")
+	}
+	if helloAck.ControlURL != "" && helloAck.ControlURL != c.identity.WSSURL {
+		if err := identity.UpdateControlEndpoint(c.cfg, c.identity, helloAck.ControlURL); err != nil {
+			return err
+		}
+		return errors.New("control endpoint updated; reconnecting")
 	}
 	if err := c.sendPendingTraffic(ctx, writer); err != nil {
 		return err

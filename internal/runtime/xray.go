@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,10 +23,15 @@ import (
 
 	agentprotocol "github.com/guanzihao166/iepl-node-agent/internal/protocol"
 	"github.com/guanzihao166/iepl-node-agent/internal/secretstore"
+	"github.com/guanzihao166/iepl-node-agent/internal/sniguard"
 	"github.com/guanzihao166/iepl-node-agent/internal/state"
 )
 
 const embeddedXrayVersion = "wyx2685-xray-20260414"
+
+// MNET_REALITY_SNI_GUARD=off disables the fronting SNI guard as an operations
+// escape hatch; the default is on for every REALITY inbound.
+const realitySniGuardEnv = "MNET_REALITY_SNI_GUARD"
 
 type XrayRuntime struct {
 	mu             sync.Mutex
@@ -35,6 +41,14 @@ type XrayRuntime struct {
 	config         *agentprotocol.DesiredConfig
 	users          []agentprotocol.UserCredential
 	pendingAccess  []agentprotocol.AccessItem
+
+	// portMu guards the loopback backend ports handed to Xray behind the SNI
+	// guard. It is separate from mu because panelNodeForInbound runs before
+	// ApplyConfig takes the runtime lock.
+	portMu       sync.Mutex
+	backendPorts map[int64]int
+
+	guards map[int64]*sniguard.Proxy
 }
 
 func NewXray(secrets *secretstore.Store) (*XrayRuntime, error) {
@@ -73,14 +87,13 @@ func (r *XrayRuntime) ApplyConfig(_ context.Context, desired agentprotocol.Desir
 	}
 	candidate, err := r.startCore(nodes, desired, candidateUsers)
 	if err != nil {
-		if previousConfig != nil {
-			if previousNodes, buildErr := r.buildNodes(*previousConfig); buildErr == nil {
-				if restored, restoreErr := r.startCore(previousNodes, *previousConfig, previousUsers); restoreErr == nil {
-					r.active = restored
-					r.coreGeneration++
-				}
-			}
-		}
+		r.restorePreviousCore(previousConfig, previousUsers)
+		return err
+	}
+	if err := r.reconcileGuardsLocked(desired); err != nil {
+		r.pendingAccess = append(r.pendingAccess, accessSamplesToItems(candidate.GetUserAccessSlice())...)
+		_ = candidate.Close()
+		r.restorePreviousCore(previousConfig, previousUsers)
 		return err
 	}
 	r.active = candidate
@@ -89,6 +102,19 @@ func (r *XrayRuntime) ApplyConfig(_ context.Context, desired agentprotocol.Desir
 	r.config = &copyDesired
 	r.users = candidateUsers
 	return nil
+}
+
+func (r *XrayRuntime) restorePreviousCore(previousConfig *agentprotocol.DesiredConfig, previousUsers []agentprotocol.UserCredential) {
+	if previousConfig == nil {
+		return
+	}
+	if previousNodes, buildErr := r.buildNodes(*previousConfig); buildErr == nil {
+		if restored, restoreErr := r.startCore(previousNodes, *previousConfig, previousUsers); restoreErr == nil {
+			r.active = restored
+			r.coreGeneration++
+		}
+	}
+	_ = r.reconcileGuardsLocked(*previousConfig)
 }
 
 func usersAvailableInConfig(desired agentprotocol.DesiredConfig, users []agentprotocol.UserCredential) []agentprotocol.UserCredential {
@@ -517,12 +543,24 @@ func (r *XrayRuntime) CollectOnline(_ context.Context) ([]agentprotocol.OnlineUs
 func (r *XrayRuntime) Status(context.Context) Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return Status{Running: r.active != nil, Version: embeddedXrayVersion, CoreGeneration: r.coreGeneration}
+	var guardRejected uint64
+	for _, proxy := range r.guards {
+		guardRejected += proxy.Stats().Rejected
+	}
+	return Status{
+		Running: r.active != nil, Version: embeddedXrayVersion,
+		CoreGeneration: r.coreGeneration, GuardedInbounds: len(r.guards),
+		GuardRejected: guardRejected,
+	}
 }
 
 func (r *XrayRuntime) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for id, proxy := range r.guards {
+		_ = proxy.Close()
+		delete(r.guards, id)
+	}
 	if r.active == nil {
 		return nil
 	}
@@ -666,6 +704,25 @@ func (r *XrayRuntime) panelNodeForInbound(desired agentprotocol.DesiredConfig, i
 			protocol.RealityPublicKey = profile.Reality.PublicKey
 			protocol.RealityShortID = profile.Reality.ShortIDs[0]
 			protocol.Fingerprint = profile.Reality.Fingerprint
+			// Every declared server name must be acceptable to Xray itself;
+			// previously only ServerNames[0] was propagated, so clients
+			// dialing any other declared name fell to the fallback path.
+			protocol.RealityServerNames = append([]string(nil), profile.Reality.ServerNames...)
+			if realitySniGuardEnabled() {
+				// The guard owns the public port and forwards surviving
+				// connections here, so Xray binds loopback instead.
+				backend := r.realityBackendPort(desired, inbound.ID)
+				if backend == 0 {
+					return nil, fmt.Errorf("no free loopback port for the REALITY guard backend of inbound %d", inbound.ID)
+				}
+				protocol.ListenAddress = "127.0.0.1"
+				protocol.Port = backend
+				if transportAcceptsProxyProtocol(inbound.Transport.Type) {
+					// Preserve the real client address for access records
+					// and per-IP limits across the guard hop.
+					protocol.AcceptProxyProtocol = true
+				}
+			}
 		}
 	}
 	info.Protocol = &protocol
@@ -804,3 +861,130 @@ func securityProfile(profiles []agentprotocol.SecurityProfile, id int64) (agentp
 }
 
 func inboundTag(id int64) string { return fmt.Sprintf("inbound-%d", id) }
+
+func realitySniGuardEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(realitySniGuardEnv))) {
+	case "off", "0", "false", "disable", "disabled":
+		return false
+	}
+	return true
+}
+
+// transportAcceptsProxyProtocol reports whether the Xray transport of this
+// fork can consume a PROXY-protocol header on the inbound. gRPC and XHTTP
+// transports have no accept_proxy_protocol support, so the guard forwards
+// without the header there (Xray records 127.0.0.1 as the client address).
+func transportAcceptsProxyProtocol(transport string) bool {
+	switch transport {
+	case agentprotocol.TransportTCP, agentprotocol.TransportWebSocket, agentprotocol.TransportHTTPUpgrade:
+		return true
+	}
+	return false
+}
+
+// realityBackendPort hands out a stable loopback port for the Xray inbound
+// behind the guard of one REALITY inbound. Ports are assigned once per inbound
+// ID and cached for the process lifetime, because the incremental user paths
+// rebuild node info and must hit the exact port the running core listens on.
+func (r *XrayRuntime) realityBackendPort(desired agentprotocol.DesiredConfig, inboundID int64) int {
+	r.portMu.Lock()
+	defer r.portMu.Unlock()
+	if r.backendPorts == nil {
+		r.backendPorts = make(map[int64]int)
+	}
+	if port, ok := r.backendPorts[inboundID]; ok {
+		return port
+	}
+	used := make(map[int]struct{})
+	for _, inbound := range desired.Inbounds {
+		if inbound.Enabled {
+			used[inbound.Port] = struct{}{}
+		}
+	}
+	for _, port := range r.backendPorts {
+		used[port] = struct{}{}
+	}
+	for attempt := 0; attempt < 64; attempt++ {
+		probe, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			continue
+		}
+		port := probe.Addr().(*net.TCPAddr).Port
+		_ = probe.Close()
+		if _, taken := used[port]; taken {
+			continue
+		}
+		r.backendPorts[inboundID] = port
+		return port
+	}
+	return 0
+}
+
+// guardSpecFor builds the guard spec of a REALITY inbound, or false when the
+// inbound does not need a guard.
+func (r *XrayRuntime) guardSpecFor(desired agentprotocol.DesiredConfig, inbound agentprotocol.Inbound) (sniguard.Spec, bool) {
+	if inbound.SecurityProfileID == 0 {
+		return sniguard.Spec{}, false
+	}
+	profile, ok := securityProfile(desired.Security, inbound.SecurityProfileID)
+	if !ok || profile.Type != agentprotocol.SecurityReality || profile.Reality == nil {
+		return sniguard.Spec{}, false
+	}
+	backend := r.realityBackendPort(desired, inbound.ID)
+	if backend == 0 {
+		return sniguard.Spec{}, false
+	}
+	listen := inbound.Listen
+	if listen == "" {
+		listen = "0.0.0.0"
+	}
+	return sniguard.Spec{
+		ListenAddr:   net.JoinHostPort(listen, strconv.Itoa(inbound.Port)),
+		BackendAddr:  net.JoinHostPort("127.0.0.1", strconv.Itoa(backend)),
+		AllowedSNIs:  append([]string(nil), profile.Reality.ServerNames...),
+		ProxyProtocol: transportAcceptsProxyProtocol(inbound.Transport.Type),
+	}, true
+}
+
+// reconcileGuardsLocked aligns the running SNI guards with a desired config:
+// guards of removed or reconfigured inbounds stop, missing guards start. It
+// must run only while the core serving the same config is up, otherwise
+// allowed traffic would reach a closed backend.
+func (r *XrayRuntime) reconcileGuardsLocked(desired agentprotocol.DesiredConfig) error {
+	specs := make(map[int64]sniguard.Spec)
+	if realitySniGuardEnabled() {
+		for _, inbound := range desired.Inbounds {
+			if !inbound.Enabled {
+				continue
+			}
+			if spec, ok := r.guardSpecFor(desired, inbound); ok {
+				specs[inbound.ID] = spec
+			}
+		}
+	}
+	for id, proxy := range r.guards {
+		spec, wanted := specs[id]
+		if !wanted || !spec.Equal(proxy.Spec()) {
+			_ = proxy.Close()
+			delete(r.guards, id)
+		}
+	}
+	var firstErr error
+	for id, spec := range specs {
+		if _, running := r.guards[id]; running {
+			continue
+		}
+		proxy, err := sniguard.Start(spec)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("start SNI guard for inbound %d: %w", id, err)
+			}
+			continue
+		}
+		if r.guards == nil {
+			r.guards = make(map[int64]*sniguard.Proxy)
+		}
+		r.guards[id] = proxy
+	}
+	return firstErr
+}

@@ -60,6 +60,9 @@ func Build(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerConfig, er
 	}
 	// Set Listen IP address
 	ipAddress := net.ParseAddress("0.0.0.0")
+	if nodeInfo.Protocol.ListenAddress != "" {
+		ipAddress = net.ParseAddress(nodeInfo.Protocol.ListenAddress)
+	}
 	in.ListenOn = &coreConf.Address{Address: ipAddress}
 	// Set SniffingConfig
 	sniffingConfig := &coreConf.SniffingConfig{
@@ -122,11 +125,19 @@ func Build(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerConfig, er
 		if err != nil {
 			return nil, fmt.Errorf("marshal reality dest error: %s", err)
 		}
+		// The guard in front of the inbound filters SNI before REALITY sees
+		// the connection, so every declared server name must be accepted here
+		// as well; a name missing from this list would fall through to the
+		// fallback path even though the guard admitted it.
+		serverNames := nodeInfo.Protocol.RealityServerNames
+		if len(serverNames) == 0 {
+			serverNames = []string{v.SNI}
+		}
 		in.StreamSetting.REALITYSettings = &coreConf.REALITYConfig{
 			Dest:        d,
 			Xver:        uint64(0),
 			Show:        false,
-			ServerNames: []string{v.SNI},
+			ServerNames: serverNames,
 			PrivateKey:  v.RealityPrivateKey,
 			ShortIds:    []string{v.RealityShortID},
 			//Mldsa65Seed: v.RealityMldsa65Seed,

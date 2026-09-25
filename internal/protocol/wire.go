@@ -54,6 +54,7 @@ type Hello struct {
 }
 
 type HelloAck struct {
+	ControlURL           string    `json:"control_url,omitempty"`
 	ProtocolVersion      int       `json:"protocol_version"`
 	SessionID            string    `json:"session_id"`
 	ServerTime           time.Time `json:"server_time"`
