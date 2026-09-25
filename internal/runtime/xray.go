@@ -939,9 +939,9 @@ func (r *XrayRuntime) guardSpecFor(desired agentprotocol.DesiredConfig, inbound 
 		listen = "0.0.0.0"
 	}
 	return sniguard.Spec{
-		ListenAddr:   net.JoinHostPort(listen, strconv.Itoa(inbound.Port)),
-		BackendAddr:  net.JoinHostPort("127.0.0.1", strconv.Itoa(backend)),
-		AllowedSNIs:  append([]string(nil), profile.Reality.ServerNames...),
+		ListenAddr:    net.JoinHostPort(listen, strconv.Itoa(inbound.Port)),
+		BackendAddr:   net.JoinHostPort("127.0.0.1", strconv.Itoa(backend)),
+		AllowedSNIs:   append([]string(nil), profile.Reality.ServerNames...),
 		ProxyProtocol: transportAcceptsProxyProtocol(inbound.Transport.Type),
 	}, true
 }

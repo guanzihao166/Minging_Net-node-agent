@@ -64,18 +64,23 @@ type HelloAck struct {
 }
 
 type Heartbeat struct {
-	SessionID            string         `json:"session_id"`
-	AppliedConfigVersion uint64         `json:"applied_config_version"`
-	AppliedConfigHash    string         `json:"applied_config_hash"`
-	AppliedUserRevision  uint64         `json:"applied_user_revision"`
-	WALPendingBatches    uint64         `json:"wal_pending_batches"`
-	WALPendingBytes      uint64         `json:"wal_pending_bytes"`
-	XrayRunning          bool           `json:"xray_running"`
-	XrayVersion          string         `json:"xray_version,omitempty"`
-	XrayCoreGeneration   uint64         `json:"xray_core_generation,omitempty"`
-	ReportedIPv4         string         `json:"reported_ipv4,omitempty"`
-	ReportedIPv6         string         `json:"reported_ipv6,omitempty"`
-	SystemMetrics        *SystemMetrics `json:"system_metrics,omitempty"`
+	SessionID            string `json:"session_id"`
+	AppliedConfigVersion uint64 `json:"applied_config_version"`
+	AppliedConfigHash    string `json:"applied_config_hash"`
+	AppliedUserRevision  uint64 `json:"applied_user_revision"`
+	WALPendingBatches    uint64 `json:"wal_pending_batches"`
+	WALPendingBytes      uint64 `json:"wal_pending_bytes"`
+	XrayRunning          bool   `json:"xray_running"`
+	XrayVersion          string `json:"xray_version,omitempty"`
+	XrayCoreGeneration   uint64 `json:"xray_core_generation,omitempty"`
+	// GuardedInbounds/GuardRejected report the REALITY SNI guard: how many
+	// inbounds it fronts, and how many connections it dropped for presenting
+	// a non-declared SNI or a malformed handshake.
+	GuardedInbounds int            `json:"guarded_inbounds,omitempty"`
+	GuardRejected   uint64         `json:"guard_rejected,omitempty"`
+	ReportedIPv4    string         `json:"reported_ipv4,omitempty"`
+	ReportedIPv6    string         `json:"reported_ipv6,omitempty"`
+	SystemMetrics   *SystemMetrics `json:"system_metrics,omitempty"`
 }
 
 type SystemMetrics struct {

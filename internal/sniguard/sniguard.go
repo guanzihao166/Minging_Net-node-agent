@@ -94,8 +94,8 @@ func Start(spec Spec) (*Proxy, error) {
 		return nil, err
 	}
 	proxy := &Proxy{
-		spec:    spec,
-		allowed: make(map[string]struct{}, len(spec.AllowedSNIs)),
+		spec:     spec,
+		allowed:  make(map[string]struct{}, len(spec.AllowedSNIs)),
 		listener: listener,
 	}
 	for _, name := range spec.AllowedSNIs {

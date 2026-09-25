@@ -65,26 +65,26 @@ type Outbound struct {
 }
 
 type Protocol struct {
-	Type                    string   `json:"type"`
-	Port                    int      `json:"port"`
-	Enable                  bool     `json:"enable"`
-	Security                string   `json:"security"`
-	SNI                     string   `json:"sni"`
-	AllowInsecure           bool     `json:"allow_insecure"`
-	Fingerprint             string   `json:"fingerprint"`
-	RealityServerAddr       string   `json:"reality_server_addr"`
-	RealityServerPort       int      `json:"reality_server_port"`
-	RealityPrivateKey       string   `json:"reality_private_key"`
-	RealityPublicKey        string   `json:"reality_public_key"`
-	RealityShortID          string   `json:"reality_short_id"`
+	Type              string `json:"type"`
+	Port              int    `json:"port"`
+	Enable            bool   `json:"enable"`
+	Security          string `json:"security"`
+	SNI               string `json:"sni"`
+	AllowInsecure     bool   `json:"allow_insecure"`
+	Fingerprint       string `json:"fingerprint"`
+	RealityServerAddr string `json:"reality_server_addr"`
+	RealityServerPort int    `json:"reality_server_port"`
+	RealityPrivateKey string `json:"reality_private_key"`
+	RealityPublicKey  string `json:"reality_public_key"`
+	RealityShortID    string `json:"reality_short_id"`
 	// ListenAddress overrides the inbound bind address. Empty means the
 	// wildcard address. The agent sets it to a loopback address when an SNI
 	// guard owns the public port in front of the inbound.
 	ListenAddress string `json:"listen_address,omitempty"`
 	// RealityServerNames is the full server-name allowlist for REALITY. When
 	// empty the single SNI is used, matching the historical behavior.
-	RealityServerNames []string `json:"reality_server_names,omitempty"`
-	Transport          string   `json:"transport"`
+	RealityServerNames      []string `json:"reality_server_names,omitempty"`
+	Transport               string   `json:"transport"`
 	Host                    string   `json:"host"`
 	Path                    string   `json:"path"`
 	ServiceName             string   `json:"service_name"`

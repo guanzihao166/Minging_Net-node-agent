@@ -25,9 +25,9 @@ func TestGuardForwardsDeclaredSNIAndDropsTheRest(t *testing.T) {
 	defer backend.Close()
 
 	proxy, err := Start(Spec{
-		ListenAddr:   loopbackAddr(t),
-		BackendAddr:  backend.Addr().String(),
-		AllowedSNIs:  []string{"allowed.example.com"},
+		ListenAddr:    loopbackAddr(t),
+		BackendAddr:   backend.Addr().String(),
+		AllowedSNIs:   []string{"allowed.example.com"},
 		ProxyProtocol: false,
 	})
 	if err != nil {
@@ -65,9 +65,9 @@ func TestGuardMatchIsCaseSensitiveLikeReality(t *testing.T) {
 	backend, _ := startTLSBackend(t)
 	defer backend.Close()
 	proxy, err := Start(Spec{
-		ListenAddr:   loopbackAddr(t),
-		BackendAddr:  backend.Addr().String(),
-		AllowedSNIs:  []string{"Allowed.Example.COM"},
+		ListenAddr:    loopbackAddr(t),
+		BackendAddr:   backend.Addr().String(),
+		AllowedSNIs:   []string{"Allowed.Example.COM"},
 		ProxyProtocol: false,
 	})
 	if err != nil {
@@ -83,9 +83,9 @@ func TestGuardDropsNonTLSAndGarbage(t *testing.T) {
 	backend, _ := startTLSBackend(t)
 	defer backend.Close()
 	proxy, err := Start(Spec{
-		ListenAddr:   loopbackAddr(t),
-		BackendAddr:  backend.Addr().String(),
-		AllowedSNIs:  []string{"allowed.example.com"},
+		ListenAddr:  loopbackAddr(t),
+		BackendAddr: backend.Addr().String(),
+		AllowedSNIs: []string{"allowed.example.com"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -139,9 +139,9 @@ func TestGuardPassesClientAddressWithProxyProtocol(t *testing.T) {
 	}()
 
 	proxy, err := Start(Spec{
-		ListenAddr:   loopbackAddr(t),
-		BackendAddr:  backend.Addr().String(),
-		AllowedSNIs:  []string{"allowed.example.com"},
+		ListenAddr:    loopbackAddr(t),
+		BackendAddr:   backend.Addr().String(),
+		AllowedSNIs:   []string{"allowed.example.com"},
 		ProxyProtocol: true,
 	})
 	if err != nil {
@@ -277,8 +277,8 @@ func startTLSBackend(t *testing.T) (net.Listener, func() int32) {
 
 var (
 	backendCertOnce sync.Once
-	backendPEMCert []byte
-	backendPEMKey  []byte
+	backendPEMCert  []byte
+	backendPEMKey   []byte
 )
 
 func backendPEM(t *testing.T) ([]byte, []byte) {

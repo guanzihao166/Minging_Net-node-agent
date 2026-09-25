@@ -120,6 +120,33 @@ On OpenRC, inspect the maintenance-service log. Root can manually retry using
 `/opt/iepl-agent/bin/iepl-agent tune-network`. Full uninstall removes only the
 Agent-owned tuning files and leaves the current runtime TCP default intact.
 
+## REALITY SNI guard (v0.1.53)
+
+Every REALITY inbound is fronted by a TCP listener that filters the TLS
+ClientHello by SNI before Xray sees the connection. Only the inbound's declared
+`server_names` are allowed through; everything else is dropped without dialing
+the dest.
+
+This closes the traffic-theft path documented in the official Xray REALITY
+guide: REALITY replays the client's SNI when it forwards an
+authentication-failed connection to its dest, so if the dest is a CDN node that
+routes by SNI instead of validating it, an attacker could proxy arbitrary
+traffic through the node. With the guard in place, non-declared SNI never
+reaches REALITY's fallback.
+
+| Property | Behavior |
+| --- | --- |
+| Matching | Exact and case-sensitive, mirroring REALITY's own `server_names` lookup |
+| Public port | Owned by the guard; Xray's REALITY inbound binds loopback behind it |
+| Client address | Preserved via PROXY protocol on TCP/WebSocket/HTTPUpgrade; gRPC and XHTTP have no proxy-protocol support in this Xray fork and record loopback |
+| Config changes | Guards follow `ApplyConfig`, roll back with the core, and release the public port when an inbound is disabled |
+| Reporting | Heartbeat carries `guarded_inbounds` and `guard_rejected` |
+
+The guard applies to every REALITY inbound, whether it existed before this
+release or is added afterwards; no enrollment or client change is required.
+`MNET_REALITY_SNI_GUARD=off` in the Agent environment disables it as an
+operations escape hatch.
+
 ## Host metrics
 
 Starting with `v0.1.18`, the Agent samples Linux `/proc` on each heartbeat and

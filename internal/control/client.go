@@ -487,6 +487,7 @@ func (c *Client) runHeartbeatAndTraffic(ctx context.Context, writer *sessionWrit
 				AppliedUserRevision:  stateValue.AppliedUserRevision,
 				WALPendingBatches:    pendingBatches, WALPendingBytes: pendingBytes,
 				XrayRunning: runtimeStatus.Running, XrayVersion: runtimeStatus.Version, XrayCoreGeneration: runtimeStatus.CoreGeneration,
+				GuardedInbounds: runtimeStatus.GuardedInbounds, GuardRejected: runtimeStatus.GuardRejected,
 				ReportedIPv4: addresses.IPv4, ReportedIPv6: addresses.IPv6,
 				SystemMetrics: systemMetrics,
 			})

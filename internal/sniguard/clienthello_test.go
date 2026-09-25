@@ -35,9 +35,9 @@ func buildClientHello(t *testing.T, serverName string) []byte {
 	}
 
 	hello := make([]byte, 0, 64)
-	hello = append(hello, 0x03, 0x03)       // legacy_version
-	hello = append(hello, make([]byte, 32)...) // random
-	hello = append(hello, 0x00)             // empty session_id
+	hello = append(hello, 0x03, 0x03)             // legacy_version
+	hello = append(hello, make([]byte, 32)...)    // random
+	hello = append(hello, 0x00)                   // empty session_id
 	hello = append(hello, 0x00, 0x02, 0x13, 0x01) // one cipher suite
 	hello = append(hello, 0x01, 0x00)             // null compression
 	var extLen [2]byte
