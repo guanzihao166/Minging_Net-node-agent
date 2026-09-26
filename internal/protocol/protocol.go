@@ -161,6 +161,7 @@ func ValidateDesiredConfig(config DesiredConfig) error {
 		return errors.New("config version and agent node id are required")
 	}
 	profiles := make(map[int64]SecurityProfile, len(config.Security))
+	profileNames := make(map[string]struct{}, len(config.Security))
 	for _, profile := range config.Security {
 		if profile.ID <= 0 {
 			return errors.New("security profile id is required")
@@ -168,6 +169,14 @@ func ValidateDesiredConfig(config DesiredConfig) error {
 		if _, exists := profiles[profile.ID]; exists {
 			return fmt.Errorf("duplicate security profile %d", profile.ID)
 		}
+		profileName := strings.ToLower(strings.TrimSpace(profile.Name))
+		if profileName == "" {
+			return fmt.Errorf("security profile %d name is required", profile.ID)
+		}
+		if _, exists := profileNames[profileName]; exists {
+			return fmt.Errorf("duplicate security profile name %q", profile.Name)
+		}
+		profileNames[profileName] = struct{}{}
 		if err := validateSecurityProfile(profile); err != nil {
 			return fmt.Errorf("security profile %d: %w", profile.ID, err)
 		}
