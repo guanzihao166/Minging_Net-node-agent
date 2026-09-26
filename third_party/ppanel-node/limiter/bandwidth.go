@@ -31,7 +31,7 @@ func userRate(user panel.UserInfo) uint64 {
 	return mbpsBytes(user.SpeedLimit)
 }
 
-func userBucketKey(uid int) string             { return "user:" + strconv.Itoa(uid) }
+func userBucketKey(tag string, uid int) string { return "user:" + tag + "|" + strconv.Itoa(uid) }
 func allocationBucketKey(uid int) string       { return "allocation:" + strconv.Itoa(uid) }
 func nodeBucketKey(tag string, uid int) string { return "node:" + tag + "|" + strconv.Itoa(uid) }
 
@@ -76,7 +76,6 @@ func (m *Manager) refreshGlobalUserRateLocked(uid int) {
 		delete(m.globalUserLimits, uid)
 		m.globalUserRates.Delete(uid)
 		m.globalAllocated.Delete(uid)
-		m.globalSpeed.Delete(userBucketKey(uid))
 		m.globalSpeed.Delete(allocationBucketKey(uid))
 		return
 	}
@@ -138,26 +137,14 @@ func (m *Manager) speedBuckets(uid int, tag string, userRate, nodeRate uint64) [
 		key  string
 		rate uint64
 	}{
-		{userBucketKey(uid), userRate}, {nodeBucketKey(tag, uid), nodeRate},
+		{userBucketKey(tag, uid), userRate}, {nodeBucketKey(tag, uid), nodeRate},
 	} {
 		if b := m.bucketForRateLocked(policy.key, policy.rate); b != nil {
 			buckets = append(buckets, b)
 		}
 	}
-	if allocated, ok := m.globalAllocated.Load(uid); ok {
-		if allocated.(uint64) == 0 {
-			m.signalBandwidthDemand(uid)
-			key := allocationBucketKey(uid)
-			if existing, ok := m.globalSpeed.Load(key); ok && existing.(*ratelimit.Bucket).Capacity() == 1 {
-				return append(buckets, existing.(*ratelimit.Bucket))
-			}
-			b := ratelimit.NewBucketWithQuantum(globalSpeedBurstWindow, 1, 1)
-			b.TakeAvailable(1)
-			m.globalSpeed.Store(key, b)
-			return append(buckets, b)
-		}
-		buckets = append(buckets, m.bucketForRateLocked(allocationBucketKey(uid), allocated.(uint64)))
-	}
+	// Control-plane allocations are aggregate scheduling hints. Enforcement is
+	// deliberately per inbound: each tag gets its own user and node buckets.
 	return buckets
 }
 

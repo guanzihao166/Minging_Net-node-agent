@@ -22,17 +22,20 @@ func TestNodeCeilingIsLocalAndIndependentFromUserAndAllocation(t *testing.T) {
 	if first[1] == second[1] {
 		t.Fatal("different subscribers share a node ceiling bucket")
 	}
+	if a.SpeedBuckets("a|one")[0] == b.SpeedBuckets("b|one")[0] {
+		t.Fatal("different inbounds share the user bucket")
+	}
 	m.SetGlobalBandwidthAllocation(1, 40_000_000, true)
 	if a.SpeedBucket("a|one").Rate() != 12_500_000 {
 		t.Fatal("allocation raised node ceiling")
 	}
 	m.SetGlobalBandwidthAllocation(1, 6_250_000, true)
-	if a.SpeedBucket("a|one").Rate() != 6_250_000 {
-		t.Fatal("lower allocation ignored")
+	if a.SpeedBucket("a|one").Rate() != 12_500_000 {
+		t.Fatal("aggregate allocation leaked into inbound limit")
 	}
 	m.SetGlobalBandwidthAllocation(1, 0, true)
-	if a.SpeedBucket("a|one").Capacity() != 1 {
-		t.Fatal("node cap resurrected zero allocation")
+	if a.SpeedBucket("a|one").Rate() != 12_500_000 {
+		t.Fatal("zero aggregate allocation leaked into inbound limit")
 	}
 	m.SetGlobalBandwidthAllocation(1, 0, false)
 	for _, node := range []uint64{6_250_000, 37_500_000, 0, 12_500_000} {

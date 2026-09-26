@@ -139,7 +139,7 @@ func TestManagerSpeedBucketFollowsReplacedUserPolicy(t *testing.T) {
 	}
 }
 
-func TestManagerSharesBandwidthBucketAcrossInbounds(t *testing.T) {
+func TestManagerSeparatesBandwidthBucketsAcrossInbounds(t *testing.T) {
 	manager := NewManager()
 	first := manager.Add("inbound-1", []panel.UserInfo{{Id: testUID, Uuid: "user-a", SpeedLimit: 20}}, map[int]int{}, "vless")
 	second := manager.Add("inbound-2", []panel.UserInfo{{Id: testUID, Uuid: "user-b", SpeedLimit: 20}}, map[int]int{}, "trojan")
@@ -149,8 +149,8 @@ func TestManagerSharesBandwidthBucketAcrossInbounds(t *testing.T) {
 	if firstBucket == nil || secondBucket == nil {
 		t.Fatal("expected shared bandwidth bucket")
 	}
-	if firstBucket != secondBucket {
-		t.Fatal("same subscriber received separate inbound bandwidth buckets")
+	if firstBucket == secondBucket {
+		t.Fatal("same subscriber shared bandwidth bucket across inbounds")
 	}
 	if firstBucket.Capacity() != 250_000 {
 		t.Fatalf("100ms burst capacity = %d, want 250000", firstBucket.Capacity())
@@ -176,13 +176,13 @@ func TestManagerKeepsNodeCeilingBelowUserRate(t *testing.T) {
 	}
 }
 
-func TestManagerAppliesControlPlaneBandwidthAllocation(t *testing.T) {
+func TestManagerDoesNotApplyCrossInboundControlAllocation(t *testing.T) {
 	manager := NewManager()
 	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
 	taguuid := format.UserTag(testTag, testUUID)
 	manager.SetGlobalBandwidthAllocation(testUID, 1_250_000, true)
 	allocated := current.SpeedBucket(taguuid)
-	if allocated == nil || allocated.Capacity() != 125_000 {
+	if allocated == nil || allocated.Capacity() != 250_000 {
 		bucket := allocated
 		t.Fatalf("allocated 10 Mbps bucket = %#v", bucket)
 	}
@@ -191,8 +191,8 @@ func TestManagerAppliesControlPlaneBandwidthAllocation(t *testing.T) {
 		t.Fatal("unchanged allocation replaced the active bandwidth bucket")
 	}
 	manager.SetGlobalBandwidthAllocation(testUID, 0, true)
-	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 1 {
-		t.Fatalf("active zero allocation bucket = %#v", bucket)
+	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 250_000 {
+		t.Fatalf("active zero allocation changed inbound bucket = %#v", bucket)
 	}
 	manager.SetGlobalBandwidthAllocation(testUID, 0, false)
 	if bucket := current.SpeedBucket(taguuid); bucket == nil || bucket.Capacity() != 250_000 {
@@ -210,7 +210,7 @@ func TestManagerKeepsIndependentUserCeilingWhenAllocationIsHigher(t *testing.T) 
 	}
 }
 
-func TestManagerSignalsZeroAllocationDemandOnceUntilDrained(t *testing.T) {
+func TestManagerDoesNotSignalCrossInboundZeroAllocationDemand(t *testing.T) {
 	manager := NewManager()
 	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
 	taguuid := format.UserTag(testTag, testUUID)
@@ -218,12 +218,12 @@ func TestManagerSignalsZeroAllocationDemandOnceUntilDrained(t *testing.T) {
 	_ = current.SpeedBucket(taguuid)
 	_ = current.SpeedBucket(taguuid)
 	demands := manager.DrainBandwidthDemands(8)
-	if len(demands) != 1 || demands[0] != testUID {
+	if len(demands) != 0 {
 		t.Fatalf("initial demands = %#v", demands)
 	}
 	_ = current.SpeedBucket(taguuid)
 	demands = manager.DrainBandwidthDemands(8)
-	if len(demands) != 1 || demands[0] != testUID {
+	if len(demands) != 0 {
 		t.Fatalf("demand after drain = %#v", demands)
 	}
 }
