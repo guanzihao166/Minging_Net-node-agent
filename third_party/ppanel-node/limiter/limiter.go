@@ -399,7 +399,12 @@ func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket
 			m.globalSpeed.Store(uid, bucket)
 			return bucket
 		}
-		limit = int64(allocatedLimit)
+		// The control-plane share is another ceiling, not a replacement for
+		// the user's independent/node policy. Keep the existing token-bucket
+		// refill, burst and dynamic writers, while applying the strictest rate.
+		if allocatedLimit > 0 && (limit <= 0 || int64(allocatedLimit) < limit) {
+			limit = int64(allocatedLimit)
+		}
 	}
 	if limit <= 0 {
 		m.globalSpeed.Delete(uid)

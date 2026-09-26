@@ -190,6 +190,16 @@ func TestManagerAppliesControlPlaneBandwidthAllocation(t *testing.T) {
 	}
 }
 
+func TestManagerKeepsIndependentUserCeilingWhenAllocationIsHigher(t *testing.T) {
+	manager := NewManager()
+	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 1}}, map[int]int{}, "vless")
+	manager.SetGlobalBandwidthAllocation(testUID, 20_000_000, true)
+	bucket := current.SpeedBucket(format.UserTag(testTag, testUUID))
+	if bucket == nil || bucket.Rate() != 125_000 {
+		t.Fatalf("control allocation bypassed independent user ceiling: %#v", bucket)
+	}
+}
+
 func TestManagerSignalsZeroAllocationDemandOnceUntilDrained(t *testing.T) {
 	manager := NewManager()
 	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
