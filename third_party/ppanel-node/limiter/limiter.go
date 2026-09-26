@@ -378,7 +378,10 @@ func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket
 	}
 	rate := fallbackRate
 	if stored, ok := m.globalUserRates.Load(uid); ok {
-		rate = stored.(int)
+		storedRate := stored.(int)
+		if storedRate > 0 && (rate <= 0 || storedRate < rate) {
+			rate = storedRate
+		}
 	}
 	limit := int64(rate) * 1_000_000 / 8
 	if allocated, ok := m.globalAllocated.Load(uid); ok {

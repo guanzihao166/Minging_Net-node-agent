@@ -166,6 +166,16 @@ func TestManagerSharesBandwidthBucketAcrossInbounds(t *testing.T) {
 	}
 }
 
+func TestManagerKeepsNodeCeilingBelowUserRate(t *testing.T) {
+	manager := NewManager()
+	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 200}}, map[int]int{}, "vless")
+	current.SpeedLimit = 100
+	bucket := current.SpeedBucket(format.UserTag(testTag, testUUID))
+	if bucket == nil || bucket.Rate() != 12_500_000 {
+		t.Fatalf("user policy bypassed node ceiling: %#v", bucket)
+	}
+}
+
 func TestManagerAppliesControlPlaneBandwidthAllocation(t *testing.T) {
 	manager := NewManager()
 	current := manager.Add(testTag, []panel.UserInfo{{Id: testUID, Uuid: testUUID, SpeedLimit: 20}}, map[int]int{}, "vless")
