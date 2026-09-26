@@ -13,11 +13,13 @@ type OnlineUser struct {
 }
 
 type UserInfo struct {
-	Id          int    `json:"id"`
-	Uuid        string `json:"uuid"`
-	Encryption  string `json:"encryption,omitempty"`
-	SpeedLimit  int    `json:"speed_limit"`
-	DeviceLimit int    `json:"device_limit"`
+	Id                int    `json:"id"`
+	Uuid              string `json:"uuid"`
+	Encryption        string `json:"encryption,omitempty"`
+	SpeedLimit        int    `json:"speed_limit"`
+	SpeedLimitBPS     uint64 `json:"speed_limit_bps,omitempty"`
+	NodeSpeedLimitBPS uint64 `json:"node_speed_limit_bps,omitempty"`
+	DeviceLimit       int    `json:"device_limit"`
 }
 
 type UserListBody struct {

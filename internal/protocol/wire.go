@@ -103,14 +103,15 @@ type ConfigResult struct {
 }
 
 type UserCredential struct {
-	SubscriberID    int64  `json:"subscriber_id"`
-	InboundID       int64  `json:"inbound_id"`
-	Kind            string `json:"kind"`
-	Value           string `json:"value"`
-	ExpiresAt       int64  `json:"expires_at"`
-	SpeedLimitBPS   uint64 `json:"speed_limit_bps"`
-	DeviceLimit     uint32 `json:"device_limit"`
-	QuotaGeneration uint64 `json:"quota_generation"`
+	SubscriberID       int64  `json:"subscriber_id"`
+	InboundID          int64  `json:"inbound_id"`
+	Kind               string `json:"kind"`
+	Value              string `json:"value"`
+	ExpiresAt          int64  `json:"expires_at"`
+	SpeedLimitBPS      uint64 `json:"speed_limit_bps"`
+	NodeGlobalLimitBPS uint64 `json:"node_global_limit_bps,omitempty"`
+	DeviceLimit        uint32 `json:"device_limit"`
+	QuotaGeneration    uint64 `json:"quota_generation"`
 }
 
 type UserSnapshot struct {

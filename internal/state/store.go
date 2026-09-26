@@ -63,9 +63,9 @@ func (s *Store) ReplaceUsers(ctx context.Context, snapshot agentprotocol.UserSna
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO users
 			(subscriber_id, inbound_id, revision, kind, value, expires_at, speed_limit_bps,
-			 device_limit, quota_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 node_global_limit_bps, device_limit, quota_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			user.SubscriberID, user.InboundID, snapshot.Revision, user.Kind, user.Value,
-			user.ExpiresAt, user.SpeedLimitBPS, user.DeviceLimit, user.QuotaGeneration)
+			user.ExpiresAt, user.SpeedLimitBPS, user.NodeGlobalLimitBPS, user.DeviceLimit, user.QuotaGeneration)
 		if err != nil {
 			return err
 		}
@@ -78,7 +78,7 @@ func (s *Store) ReplaceUsers(ctx context.Context, snapshot agentprotocol.UserSna
 
 func (s *Store) Users(ctx context.Context) ([]agentprotocol.UserCredential, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT subscriber_id, inbound_id, kind, value,
-		expires_at, speed_limit_bps, device_limit, quota_generation
+		expires_at, speed_limit_bps, node_global_limit_bps, device_limit, quota_generation
 		FROM users ORDER BY inbound_id, subscriber_id`)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (s *Store) Users(ctx context.Context) ([]agentprotocol.UserCredential, erro
 	for rows.Next() {
 		var user agentprotocol.UserCredential
 		if err := rows.Scan(&user.SubscriberID, &user.InboundID, &user.Kind, &user.Value,
-			&user.ExpiresAt, &user.SpeedLimitBPS, &user.DeviceLimit, &user.QuotaGeneration); err != nil {
+			&user.ExpiresAt, &user.SpeedLimitBPS, &user.NodeGlobalLimitBPS, &user.DeviceLimit, &user.QuotaGeneration); err != nil {
 			return nil, err
 		}
 		users = append(users, user)
@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS users (
   value TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   speed_limit_bps INTEGER NOT NULL,
+  node_global_limit_bps INTEGER NOT NULL DEFAULT 0,
   device_limit INTEGER NOT NULL,
   quota_generation INTEGER NOT NULL,
   PRIMARY KEY (subscriber_id, inbound_id)
@@ -208,8 +209,18 @@ INSERT INTO meta(key, value) VALUES ('applied_config_version', '0') ON CONFLICT(
 INSERT INTO meta(key, value) VALUES ('applied_config_hash', '') ON CONFLICT(key) DO NOTHING;
 INSERT INTO meta(key, value) VALUES ('applied_user_revision', '0') ON CONFLICT(key) DO NOTHING;
 `
-	_, err := s.db.ExecContext(ctx, schema)
-	return err
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'node_global_limit_bps'`).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		_, err := s.db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN node_global_limit_bps INTEGER NOT NULL DEFAULT 0`)
+		return err
+	}
+	return nil
 }
 
 func (s *Store) RuntimeState(ctx context.Context) (RuntimeState, error) {

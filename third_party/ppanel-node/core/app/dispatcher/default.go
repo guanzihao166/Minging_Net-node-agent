@@ -219,15 +219,15 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 		lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Source.Address.IP().String())
 		inboundLink.Writer = managedWriter
 		sessionInbound.CanSpliceCopy = 3
-		resolveBucket := func() *ratelimit.Bucket {
+		resolveBuckets := func() []*ratelimit.Bucket {
 			current, err := d.LimiterManager.Get(sessionInbound.Tag)
 			if err != nil {
 				return nil
 			}
-			return current.SpeedBucket(user.Email)
+			return current.SpeedBuckets(user.Email)
 		}
-		inboundLink.Writer = rate.NewDynamicRateLimitWriter(inboundLink.Writer, resolveBucket)
-		outboundLink.Writer = rate.NewDynamicRateLimitWriter(outboundLink.Writer, resolveBucket)
+		inboundLink.Writer = rate.NewDynamicRateLimitWriters(ctx, inboundLink.Writer, resolveBuckets)
+		outboundLink.Writer = rate.NewDynamicRateLimitWriters(ctx, outboundLink.Writer, resolveBuckets)
 		var t *counter.TrafficCounter
 		if c, ok := d.Counter.Load(sessionInbound.Tag); !ok {
 			t = counter.NewTrafficCounter()
@@ -427,14 +427,15 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Source.Address.IP().String())
 		outbound.Writer = managedWriter
 		sessionInbound.CanSpliceCopy = 3
-		resolveBucket := func() *ratelimit.Bucket {
+		resolveBuckets := func() []*ratelimit.Bucket {
 			current, err := d.LimiterManager.Get(sessionInbound.Tag)
 			if err != nil {
 				return nil
 			}
-			return current.SpeedBucket(user.Email)
+			return current.SpeedBuckets(user.Email)
 		}
-		outbound.Writer = rate.NewDynamicRateLimitWriter(outbound.Writer, resolveBucket)
+		outbound.Writer = rate.NewDynamicRateLimitWriters(ctx, outbound.Writer, resolveBuckets)
+		outbound.Reader = rate.NewDynamicRateLimitReader(ctx, outbound.Reader, resolveBuckets)
 		var t *counter.TrafficCounter
 		if c, ok := d.Counter.Load(sessionInbound.Tag); !ok {
 			t = counter.NewTrafficCounter()

@@ -15,11 +15,8 @@ type CounterReader struct {
 	Observe func(uint64)
 }
 
-func (c *CounterReader) ReadMultiBufferTimeout(time.Duration) (buf.MultiBuffer, error) {
-	mb, err := c.Reader.ReadMultiBufferTimeout(time.Second)
-	if err != nil {
-		return nil, err
-	}
+func (c *CounterReader) ReadMultiBufferTimeout(timeout time.Duration) (buf.MultiBuffer, error) {
+	mb, err := c.Reader.ReadMultiBufferTimeout(timeout)
 	if mb.Len() > 0 {
 		size := mb.Len()
 		c.Counter.Add(int64(size))
@@ -27,14 +24,11 @@ func (c *CounterReader) ReadMultiBufferTimeout(time.Duration) (buf.MultiBuffer, 
 			c.Observe(uint64(size))
 		}
 	}
-	return mb, nil
+	return mb, err
 }
 
 func (c *CounterReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	mb, err := c.Reader.ReadMultiBuffer()
-	if err != nil {
-		return nil, err
-	}
 	if mb.Len() > 0 {
 		size := mb.Len()
 		c.Counter.Add(int64(size))
@@ -42,5 +36,5 @@ func (c *CounterReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 			c.Observe(uint64(size))
 		}
 	}
-	return mb, nil
+	return mb, err
 }

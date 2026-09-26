@@ -29,6 +29,8 @@ jobs:
           cache: true
       - run: go test ./...
       - run: go vet ./...
+      - run: go test -race ./limiter ./common/rate ./core/app/dispatcher
+        working-directory: third_party/ppanel-node
       - run: sh -n scripts/install.sh packaging/openrc/iepl-agent packaging/openrc/iepl-agent-maintenance scripts/generate-sbom.sh scripts/generate-provenance.sh
 
   build:

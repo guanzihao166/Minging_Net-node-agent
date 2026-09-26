@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"os"
 	"sort"
@@ -447,7 +446,7 @@ func sameRuntimeIdentity(left, right agentprotocol.UserCredential) bool {
 }
 
 func sameRuntimePolicy(left, right agentprotocol.UserCredential) bool {
-	return left.SpeedLimitBPS == right.SpeedLimitBPS && left.DeviceLimit == right.DeviceLimit
+	return left.SpeedLimitBPS == right.SpeedLimitBPS && left.NodeGlobalLimitBPS == right.NodeGlobalLimitBPS && left.DeviceLimit == right.DeviceLimit
 }
 
 func findInbound(desired agentprotocol.DesiredConfig, id int64) agentprotocol.Inbound {
@@ -792,11 +791,12 @@ func panelUsersByInbound(desired agentprotocol.DesiredConfig, users []agentproto
 		}
 		speedMbps := 0
 		if user.SpeedLimitBPS > 0 {
-			speedMbps = int(math.Ceil(float64(user.SpeedLimitBPS*8) / 1000000))
+			speedMbps = int(user.SpeedLimitBPS / 125_000)
 		}
 		panelUser := panel.UserInfo{
 			Id: int(user.SubscriberID), Uuid: user.Value,
 			SpeedLimit: speedMbps, DeviceLimit: int(user.DeviceLimit),
+			SpeedLimitBPS: user.SpeedLimitBPS, NodeSpeedLimitBPS: user.NodeGlobalLimitBPS,
 		}
 		if inbound.Protocol == agentprotocol.ProtocolVLESS && inbound.VLESS != nil {
 			panelUser.Encryption = inbound.VLESS.EncryptionClientConfig
