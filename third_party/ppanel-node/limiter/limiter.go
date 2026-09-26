@@ -16,9 +16,10 @@ type Manager struct {
 	limiters         map[string]*Limiter
 	globalLock       sync.Mutex
 	globalUserLimits map[int]map[string]int
-	globalUserRates  sync.Map // Key: subscriber ID, value: effective Mbps
-	globalAllocated  sync.Map // Key: subscriber ID, value: allocated BPS
-	globalSpeed      sync.Map // Key: subscriber ID, value: *ratelimit.Bucket
+	globalUserRates  sync.Map               // Key: subscriber ID, value: effective Mbps
+	globalNodeRates  map[int]map[string]int // Key: subscriber ID, per-inbound node ceilings
+	globalAllocated  sync.Map               // Key: subscriber ID, value: allocated BPS
+	globalSpeed      sync.Map               // Key: subscriber ID, value: *ratelimit.Bucket
 	bandwidthDemands chan int
 	pendingDemands   sync.Map // Key: subscriber ID, value: struct{}
 }
@@ -32,6 +33,7 @@ func NewManager() *Manager {
 	return &Manager{
 		limiters:         make(map[string]*Limiter),
 		globalUserLimits: make(map[int]map[string]int),
+		globalNodeRates:  make(map[int]map[string]int),
 		bandwidthDemands: make(chan int, 1024),
 	}
 }
@@ -121,6 +123,7 @@ func (m *Manager) Add(tag string, users []panel.UserInfo, aliveList map[int]int,
 	m.lock.Unlock()
 	for i := range users {
 		m.updateGlobalUserLimit(tag, users[i], false)
+		m.updateGlobalNodeRate(tag, users[i].Id, info.SpeedLimit)
 	}
 	return info
 }
@@ -205,9 +208,11 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 	}
 	for i := range deleted {
 		l.manager.updateGlobalUserLimit(tag, deleted[i], true)
+		l.manager.updateGlobalNodeRate(tag, deleted[i].Id, 0)
 	}
 	for i := range added {
 		l.manager.updateGlobalUserLimit(tag, added[i], false)
+		l.manager.updateGlobalNodeRate(tag, added[i].Id, l.SpeedLimit)
 	}
 }
 
@@ -337,6 +342,7 @@ func (m *Manager) updateGlobalUserLimit(tag string, user panel.UserInfo, remove 
 func (m *Manager) removeGlobalTag(tag string) {
 	prefix := tag + "|"
 	m.globalLock.Lock()
+	defer m.globalLock.Unlock()
 	for uid, entries := range m.globalUserLimits {
 		for key := range entries {
 			if strings.HasPrefix(key, prefix) {
@@ -345,7 +351,39 @@ func (m *Manager) removeGlobalTag(tag string) {
 		}
 		m.refreshGlobalUserRateLocked(uid)
 	}
-	m.globalLock.Unlock()
+	for uid, entries := range m.globalNodeRates {
+		delete(entries, tag)
+		if len(entries) == 0 {
+			delete(m.globalNodeRates, uid)
+		}
+		m.globalSpeed.Delete(uid)
+	}
+}
+
+func (m *Manager) updateGlobalNodeRate(tag string, uid, rate int) {
+	if m == nil || uid <= 0 || strings.TrimSpace(tag) == "" {
+		return
+	}
+	m.globalLock.Lock()
+	defer m.globalLock.Unlock()
+	entries := m.globalNodeRates[uid]
+	if entries == nil {
+		entries = make(map[string]int)
+		m.globalNodeRates[uid] = entries
+	}
+	if rate > 0 {
+		entries[tag] = rate
+	} else {
+		delete(entries, tag)
+		if len(entries) == 0 {
+			delete(m.globalNodeRates, uid)
+		}
+	}
+	m.refreshGlobalSpeedBucketLocked(uid)
+}
+
+func (m *Manager) refreshGlobalSpeedBucketLocked(uid int) {
+	m.globalSpeed.Delete(uid)
 }
 
 func (m *Manager) refreshGlobalUserRateLocked(uid int) {
@@ -377,6 +415,15 @@ func (m *Manager) globalSpeedBucket(uid int, fallbackRate int) *ratelimit.Bucket
 		return nil
 	}
 	rate := fallbackRate
+	m.globalLock.Lock()
+	if entries := m.globalNodeRates[uid]; len(entries) > 0 {
+		for _, nodeRate := range entries {
+			if nodeRate > 0 && (rate <= 0 || nodeRate < rate) {
+				rate = nodeRate
+			}
+		}
+	}
+	m.globalLock.Unlock()
 	if stored, ok := m.globalUserRates.Load(uid); ok {
 		storedRate := stored.(int)
 		if storedRate > 0 && (rate <= 0 || storedRate < rate) {
