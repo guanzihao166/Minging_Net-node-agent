@@ -243,13 +243,16 @@ type OnlineSnapshot struct {
 }
 
 // BandwidthAllocation distributes one subscriber's total bandwidth across the
-// Agent nodes where that subscriber currently has live links.
+// online inbounds. PerInbound messages replace the complete inbound allocation
+// table for each included subscriber; an absent inbound receives zero share.
 type BandwidthAllocation struct {
 	Allocations []SubscriberBandwidthAllocation `json:"allocations"`
+	PerInbound  bool                            `json:"per_inbound,omitempty"`
 }
 
 type SubscriberBandwidthAllocation struct {
 	SubscriberID     int64  `json:"subscriber_id"`
+	InboundID        int64  `json:"inbound_id,omitempty"`
 	SpeedLimitBPS    uint64 `json:"speed_limit_bps"`
 	AllocationActive bool   `json:"allocation_active"`
 }

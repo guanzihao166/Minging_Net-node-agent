@@ -16,9 +16,10 @@ type Manager struct {
 	limiters         map[string]*Limiter
 	globalLock       sync.Mutex
 	globalUserLimits map[int]map[string]uint64
-	globalUserRates  sync.Map // Key: subscriber ID, value: bytes per second
-	globalAllocated  sync.Map // Key: subscriber ID, value: allocated BPS
-	globalSpeed      sync.Map // Keys: user:<uid>, node:<tag>, allocation:<uid>, effective:<tag>|<uid>
+	globalUserRates  sync.Map                  // Key: subscriber ID, value: bytes per second
+	globalAllocated  sync.Map                  // Key: subscriber ID, value: allocated BPS
+	inboundAllocated map[int]map[string]uint64 // nil entry falls back to static policy
+	globalSpeed      sync.Map                  // Keys: user:<uid>, node:<tag>, allocation:<uid>, effective:<tag>|<uid>
 	bandwidthDemands chan int
 	pendingDemands   sync.Map // Key: subscriber ID, value: struct{}
 }
@@ -32,6 +33,7 @@ func NewManager() *Manager {
 	return &Manager{
 		limiters:         make(map[string]*Limiter),
 		globalUserLimits: make(map[int]map[string]uint64),
+		inboundAllocated: make(map[int]map[string]uint64),
 		bandwidthDemands: make(chan int, 1024),
 	}
 }
@@ -183,6 +185,26 @@ func (m *Manager) SetGlobalBandwidthAllocation(uid int, speedLimitBPS uint64, ac
 	// Dynamic writers resolve the bucket for every write. Removing the current
 	// bucket makes the next write pick up the new allocation without a reconnect.
 	m.globalSpeed.Delete(allocationBucketKey(uid))
+}
+
+// A complete per-subscriber snapshot makes absent inbounds zero-allocation,
+// rather than allowing an old inbound to retain a share of the global budget.
+func (m *Manager) SetInboundBandwidthAllocations(uid int, allocations map[string]uint64, active bool) {
+	if uid <= 0 {
+		return
+	}
+	m.globalLock.Lock()
+	defer m.globalLock.Unlock()
+	m.globalAllocated.Delete(uid)
+	if !active {
+		delete(m.inboundAllocated, uid)
+		return
+	}
+	copy := make(map[string]uint64, len(allocations))
+	for tag, rate := range allocations {
+		copy[tag] = rate
+	}
+	m.inboundAllocated[uid] = copy
 }
 
 func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {

@@ -76,6 +76,7 @@ func (m *Manager) refreshGlobalUserRateLocked(uid int) {
 		delete(m.globalUserLimits, uid)
 		m.globalUserRates.Delete(uid)
 		m.globalAllocated.Delete(uid)
+		delete(m.inboundAllocated, uid)
 		m.globalSpeed.Delete(allocationBucketKey(uid))
 		return
 	}
@@ -129,8 +130,20 @@ func (m *Manager) speedBuckets(uid int, tag string, userRate, nodeRate uint64) [
 	}
 	m.globalLock.Lock()
 	defer m.globalLock.Unlock()
-	if stored, ok := m.globalUserRates.Load(uid); ok {
-		userRate = minPositive(userRate, stored.(uint64))
+	if allocations, active := m.inboundAllocated[uid]; active && userRate > 0 {
+		share := allocations[tag]
+		if share == 0 {
+			m.signalBandwidthDemand(uid)
+			key := userBucketKey(tag, uid)
+			if cached, ok := m.globalSpeed.Load(key); ok && cached.(*ratelimit.Bucket).Capacity() == 1 {
+				return []*ratelimit.Bucket{cached.(*ratelimit.Bucket)}
+			}
+			paused := ratelimit.NewBucketWithQuantum(100*time.Millisecond, 1, 1)
+			paused.TakeAvailable(1)
+			m.globalSpeed.Store(key, paused)
+			return []*ratelimit.Bucket{paused}
+		}
+		userRate = minPositive(userRate, share)
 	}
 	buckets := make([]*ratelimit.Bucket, 0, 3)
 	for _, policy := range []struct {
@@ -143,8 +156,7 @@ func (m *Manager) speedBuckets(uid int, tag string, userRate, nodeRate uint64) [
 			buckets = append(buckets, b)
 		}
 	}
-	// Control-plane allocations are aggregate scheduling hints. Enforcement is
-	// deliberately per inbound: each tag gets its own user and node buckets.
+	// Both directions and all streams on this inbound consume these same buckets.
 	return buckets
 }
 

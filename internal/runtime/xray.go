@@ -33,13 +33,14 @@ const embeddedXrayVersion = "wyx2685-xray-20260414"
 const realitySniGuardEnv = "MNET_REALITY_SNI_GUARD"
 
 type XrayRuntime struct {
-	mu             sync.Mutex
-	secrets        *secretstore.Store
-	active         *ppcore.XrayCore
-	coreGeneration uint64
-	config         *agentprotocol.DesiredConfig
-	users          []agentprotocol.UserCredential
-	pendingAccess  []agentprotocol.AccessItem
+	mu                 sync.Mutex
+	secrets            *secretstore.Store
+	active             *ppcore.XrayCore
+	coreGeneration     uint64
+	config             *agentprotocol.DesiredConfig
+	users              []agentprotocol.UserCredential
+	pendingAccess      []agentprotocol.AccessItem
+	inboundAllocations map[int64]map[string]uint64
 
 	// portMu guards the loopback backend ports handed to Xray behind the SNI
 	// guard. It is separate from mu because panelNodeForInbound runs before
@@ -160,10 +161,60 @@ func (r *XrayRuntime) ApplyBandwidthAllocation(_ context.Context, allocation age
 	if r.active == nil {
 		return nil
 	}
+	if allocation.PerInbound {
+		shares := make(map[int64]map[string]uint64)
+		active := make(map[int64]bool)
+		for _, item := range allocation.Allocations {
+			if item.SubscriberID <= 0 || item.InboundID < 0 {
+				return errors.New("invalid inbound bandwidth allocation")
+			}
+			if shares[item.SubscriberID] == nil {
+				shares[item.SubscriberID] = make(map[string]uint64)
+				active[item.SubscriberID] = item.AllocationActive
+			} else if active[item.SubscriberID] != item.AllocationActive {
+				return errors.New("inconsistent inbound bandwidth allocation")
+			}
+			if item.InboundID > 0 {
+				tag := "inbound-" + strconv.FormatInt(item.InboundID, 10)
+				if _, duplicate := shares[item.SubscriberID][tag]; duplicate {
+					return errors.New("duplicate inbound bandwidth allocation")
+				}
+				shares[item.SubscriberID][tag] = item.SpeedLimitBPS
+			}
+		}
+		for uid, byTag := range shares {
+			if r.inboundAllocations == nil {
+				r.inboundAllocations = make(map[int64]map[string]uint64)
+			}
+			if active[uid] {
+				r.inboundAllocations[uid] = byTag
+			} else {
+				delete(r.inboundAllocations, uid)
+			}
+			r.active.LimiterManager.SetInboundBandwidthAllocations(int(uid), byTag, active[uid])
+		}
+		r.pruneInboundAllocationsLocked()
+		return nil
+	}
 	for _, item := range allocation.Allocations {
 		r.active.LimiterManager.SetGlobalBandwidthAllocation(int(item.SubscriberID), item.SpeedLimitBPS, item.AllocationActive)
 	}
 	return nil
+}
+
+func (r *XrayRuntime) pruneInboundAllocationsLocked() {
+	if len(r.inboundAllocations) == 0 {
+		return
+	}
+	present := make(map[int64]struct{}, len(r.users))
+	for _, user := range r.users {
+		present[user.SubscriberID] = struct{}{}
+	}
+	for uid := range r.inboundAllocations {
+		if _, ok := present[uid]; !ok {
+			delete(r.inboundAllocations, uid)
+		}
+	}
 }
 
 // DrainBandwidthDemands exposes zero-allocation write attempts without
@@ -271,6 +322,7 @@ func (r *XrayRuntime) applyUsersIncrementalLocked(users []agentprotocol.UserCred
 	}
 	if len(removed) == 0 && len(added) == 0 && len(policyUpdates) == 0 {
 		r.users = append([]agentprotocol.UserCredential(nil), users...)
+		r.pruneInboundAllocationsLocked()
 		return nil
 	}
 	if err := r.disconnectUsersLocked(stale); err != nil {
@@ -309,6 +361,7 @@ func (r *XrayRuntime) applyUsersIncrementalLocked(users []agentprotocol.UserCred
 		}
 	}
 	r.users = append([]agentprotocol.UserCredential(nil), users...)
+	r.pruneInboundAllocationsLocked()
 	return nil
 }
 
@@ -765,6 +818,11 @@ func (r *XrayRuntime) startCore(nodes []runtimeNode, desired agentprotocol.Desir
 		}
 		limiter, _ := core.LimiterManager.Get(node.tag)
 		applyExpiryAndLimits(limiter, node.tag, users, inboundID)
+	}
+	for _, user := range users {
+		if shares, active := r.inboundAllocations[user.SubscriberID]; active {
+			core.LimiterManager.SetInboundBandwidthAllocations(int(user.SubscriberID), shares, true)
+		}
 	}
 	return core, nil
 }

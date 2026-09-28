@@ -171,4 +171,40 @@ func TestVLESSNodeBandwidthEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	measure("A cap removed", a.Port, true, 1, 25_000_000, 200)
+	allocation := agentprotocol.BandwidthAllocation{PerInbound: true, Allocations: []agentprotocol.SubscriberBandwidthAllocation{
+		{SubscriberID: 101, InboundID: a.ID, SpeedLimitBPS: 6_250_000, AllocationActive: true},
+		{SubscriberID: 101, InboundID: b.ID, SpeedLimitBPS: 18_750_000, AllocationActive: true},
+	}}
+	if err := runtime.ApplyBandwidthAllocation(ctx, allocation); err != nil {
+		t.Fatal(err)
+	}
+	measure("A allocated upload", a.Port, false, 1, 12_500_000, 50)
+	measure("B allocated download", b.Port, true, 1, 18_750_000, 150)
+	if err := runtime.ApplyConfig(ctx, desired); err != nil {
+		t.Fatal(err)
+	}
+	measure("A allocation survives rebuild", a.Port, true, 1, 12_500_000, 50)
+	// Two directions on one inbound share the assigned rate.
+	upload, err := dial(a.Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upload.Close()
+	download, err := dial(a.Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer download.Close()
+	start := time.Now()
+	errs := make(chan error, 2)
+	go func() { errs <- transfer(upload, false, 6_250_000) }()
+	go func() { errs <- transfer(download, true, 6_250_000) }()
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rate := 12_500_000.0 * 8 / time.Since(start).Seconds() / 1e6; rate > 57.5 {
+		t.Fatalf("duplex exceeded shared 50 Mbps allocation: %.2f", rate)
+	}
 }
