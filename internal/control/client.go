@@ -578,6 +578,11 @@ func (c *Client) applyDesiredConfig(ctx context.Context, writer *sessionWriter, 
 		return err
 	}
 	if inserted {
+		// Seal pending bytes with the OLD applied version before changing rates,
+		// listener IDs or resetting runtime counters. Failure leaves config unapplied.
+		if err := c.collectTrafficWindowLocked(ctx); err != nil {
+			return err
+		}
 		if err := c.runtime.ApplyConfig(ctx, signed.Config); err != nil {
 			_ = writer.send(agentprotocol.TypeConfigResult, agentprotocol.ConfigResult{
 				Version: signed.Config.Version, SHA256: signed.SHA256, Status: "failed",
@@ -715,9 +720,13 @@ func normalizedCredentialKind(value string) string {
 }
 
 func (c *Client) collectTrafficWindow(ctx context.Context) error {
-	c.runtimeSyncMu.RLock()
+	c.runtimeSyncMu.Lock()
+	defer c.runtimeSyncMu.Unlock()
+	return c.collectTrafficWindowLocked(ctx)
+}
+
+func (c *Client) collectTrafficWindowLocked(ctx context.Context) error {
 	deltas, err := c.runtime.CollectTraffic(ctx)
-	c.runtimeSyncMu.RUnlock()
 	if err != nil {
 		return err
 	}
